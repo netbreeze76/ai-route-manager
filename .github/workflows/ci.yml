@@ -12,7 +12,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
         with:
           version: 10.18.3
@@ -34,5 +34,5 @@ jobs:
   macos-script-gates:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: bash -n scripts/build-engine-macos.sh scripts/build-macos.sh scripts/verify-macos-bundle.sh
