@@ -4,6 +4,8 @@ version = "1.0.6"
 description = "Desktop manager for explicit, testable and reversible network routing policies"
 authors = ["AI Route Manager contributors"]
 license = "GPL-3.0-only"
+repository = "https://github.com/netbreeze76/ai-route-manager"
+homepage = "https://github.com/netbreeze76/ai-route-manager"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

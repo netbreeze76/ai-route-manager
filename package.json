@@ -3,6 +3,14 @@
   "private": true,
   "version": "1.0.6",
   "description": "A desktop manager for explicit, testable and reversible network routing policies.",
+  "homepage": "https://github.com/netbreeze76/ai-route-manager#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netbreeze76/ai-route-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/netbreeze76/ai-route-manager/issues"
+  },
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
