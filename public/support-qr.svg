@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-labelledby="title desc">
+  <title id="title">赞赏码占位图</title>
+  <desc id="desc">发布前请用真实收款码替换此文件</desc>
+  <rect width="240" height="240" rx="24" fill="#f3f7ff"/>
+  <rect x="18" y="18" width="204" height="204" rx="18" fill="#fff" stroke="#d9e1f6" stroke-width="3"/>
+  <path d="M44 44h48v48H44zm10 10v28h28V54zm94-10h48v48h-48zm10 10v28h28V54zM44 148h48v48H44zm10 10v28h28v-28z" fill="#5969d8"/>
+  <path d="M112 48h16v16h-16zm0 28h28v16h-28zm-8 32h20v20h-20zm32 0h16v16h-16zm24 0h36v16h-36zm-52 32h16v16h-16zm28-4h20v32h-20zm28 4h32v16h-32zm-56 32h20v24h-20zm48 4h16v20h-16zm28-8h12v28h-12z" fill="#8a96e8"/>
+  <rect x="48" y="102" width="144" height="36" rx="18" fill="#fff" stroke="#d9e1f6"/>
+  <text x="120" y="116" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="11" font-weight="700" fill="#4655bd">赞赏码位置</text>
+  <text x="120" y="130" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="9" fill="#7b86a8">发布前替换真实二维码</text>
+</svg>

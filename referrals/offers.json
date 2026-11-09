@@ -1,0 +1,50 @@
+[
+  {
+    "id": "publisher-bajie-vpn",
+    "category": "vpn",
+    "placement": "download-vpn",
+    "provider": "八戒 VPN",
+    "title": "八戒 VPN｜月付与不限时，按需选",
+    "summary": "天天用，还是偶尔用？先选适合自己的节奏。公开套餐资料列有月付套餐和不限时流量包，适合按使用频率与预算做选择。推荐给想比较周期套餐与按量方案的用户；先看流量重置和到期规则，再决定买哪档。套餐类别为公开资料参考，当前权益以下单页为准。",
+    "badge": "灵活选套餐",
+    "price": "月付 / 不限时流量包 · 价格以后台为准",
+    "url": "https://bajie.la/register?aff=5sSEHgT9",
+    "coupon": "",
+    "disclosure": "此链接属于邀请推广链接；你通过该链接注册并满足服务商返利条件后，开发者可能获得佣金或返利。请按实际需要选择，购买、付款和售后由服务商处理。",
+    "enabled": true,
+    "priority": 100,
+    "clickCount": 0
+  },
+  {
+    "id": "publisher-vpn-second",
+    "category": "vpn",
+    "placement": "download-vpn",
+    "provider": "魔戒",
+    "title": "魔戒｜按量计费，轻度与备用之选",
+    "summary": "用得不多，也值得有一份随时可用的准备。魔戒主打按量计费、不限时流量包，适合偶尔查资料、轻度使用，或作为主力之外的备用订阅。购买前留意节点流量倍率；视频和大文件更耗流量，重度用户建议先比较总成本。不限时不等于无限流量或永久服务承诺，实际规则以后台为准。",
+    "badge": "按量付费",
+    "price": "按量流量包 · 价格与有效期以后台为准",
+    "url": "https://43.129.207.58:8000/register?aff=ZQayNpeO",
+    "coupon": "",
+    "disclosure": "此链接属于邀请推广链接；你通过该链接注册并满足服务商返利条件后，开发者可能获得佣金或返利。请按实际需要选择，购买、付款和售后由服务商处理。",
+    "enabled": true,
+    "priority": 99,
+    "clickCount": 0
+  },
+  {
+    "id": "publisher-digitalocean-vps",
+    "category": "vps",
+    "placement": "stable-vpn",
+    "provider": "DigitalOcean",
+    "title": "DigitalOcean｜把自己的服务，放到自己的云服务器",
+    "summary": "不只是租一条现成线路，而是拥有一台可自行管理的云服务器。适合自建网站、开发测试、部署应用，或按自己的需求配置固定出口。愿意动手、希望掌握配置的人更合适；系统更新、服务配置与费用管理也需要自己负责。服务器地区和套餐按实际需求选，不预设必须购买新加坡。",
+    "badge": "自建云服务器",
+    "price": "套餐与用量计费 · 以官网为准",
+    "url": "https://m.do.co/c/c1658e19b9ed",
+    "coupon": "",
+    "disclosure": "此链接属于邀请推广链接。按当前 DigitalOcean 推荐规则，被邀请人实际消费并支付满 25 美元后，推荐方可获得 25 美元账户额度，用于后续云服务账单；该额度不可提现。新用户权益、适用条件和最终规则以 DigitalOcean 为准。",
+    "enabled": true,
+    "priority": 98,
+    "clickCount": 0
+  }
+]

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>AI Route Manager __VERSION__</title>
+  <style>
+    :root{font-family:Inter,"Segoe UI",sans-serif;color:#edf2ff;background:#09111f}body{max-width:860px;margin:0 auto;padding:64px 24px;background:radial-gradient(circle at 80% 0,#19376d 0,transparent 42%)}main{background:#101b31;border:1px solid #294066;border-radius:24px;padding:36px;box-shadow:0 30px 80px #0008}h1{margin:.2em 0;font-size:clamp(2rem,6vw,4rem)}p{color:#b9c8e6;line-height:1.75}.actions{display:flex;gap:12px;flex-wrap:wrap;margin:28px 0}a{color:#fff;background:#4f6fff;padding:13px 18px;border-radius:12px;text-decoration:none;font-weight:700}a.secondary{background:#21304d}code{display:block;overflow-wrap:anywhere;background:#07101e;padding:12px;border-radius:10px;color:#9fd5ff}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.fact{background:#0b1629;padding:16px;border-radius:14px}.fact strong{display:block;margin-bottom:6px}</style>
+</head>
+<body><main>
+  <small>WINDOWS PRIVATE BETA</small>
+  <h1>AI Route Manager</h1>
+  <p>中国大陆用户的 AI 固定出口、国内直连、下载分流、移动端导出、远程控制与自恢复管理器。版本 __VERSION__ 使用强制签名更新。</p>
+  <div class="actions"><a href="__SETUP__">下载安装版</a><a class="secondary" href="__PORTABLE__">下载便携版</a><a class="secondary" href="__MANIFEST__">查看更新清单</a></div>
+  <div class="facts"><div class="fact"><strong>安装版 SHA-256</strong><code>__SETUP_SHA__</code></div><div class="fact"><strong>便携版 SHA-256</strong><code>__PORTABLE_SHA__</code></div></div>
+  <p>更新安装前会使用应用内置公钥验证签名；推荐链接会明确披露返利关系，购买和支付均在服务商网站完成。</p>
+</main></body></html>
