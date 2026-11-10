@@ -1,74 +1,106 @@
 # AI Route Manager
 
-面向 Windows 与 macOS 的图形化分流、固定出口、设备和远程连接管理器。
+<p align="center">
+  <strong>把分流、固定出口、家庭网关和远程连接集中到一个可预演、可验证、可回滚的桌面管理器中。</strong>
+</p>
 
-## 当前可运行内容
+<p align="center">
+  <a href="https://github.com/netbreeze76/ai-route-manager/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/netbreeze76/ai-route-manager/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/netbreeze76/ai-route-manager/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/netbreeze76/ai-route-manager"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/netbreeze76/ai-route-manager"></a>
+  <img alt="Windows x64" src="https://img.shields.io/badge/download-Windows%20x64-2463eb">
+</p>
 
-- React/TypeScript 产品界面：总览、线路与 VPS、场景分流、设备、远程控制、推荐中心、诊断和设置。
-- 安全预览模式：桌面端只读取既有本机入口，不接管或重启当前代理。
-- Rust/Tauri 本地后端：端口快照、配置校验、原子保存与加载。
-- 公共版地区策略：每位用户可填写两位地区代码、显示名称和多个优先节点关键词；固定 VPS、订阅节点筛选、出口健康检查和移动端导出共同使用该策略，不再把新加坡写死为产品规则。
-- 旧版个人配置自动迁移为 `SG / 新加坡 / 李家坡2-直连`，因此原用户升级后保持既有行为；全新用户没有预设国家，必须自行填写 SG、US、JP、TW、HK 或其他合法两位地区代码。
-- 首次配置只要求稳定订阅与目标地区；空白下载订阅和空白固定 VPS 不会被误当成无效配置，用户可以按需追加。总览只显示实际保存的下载线路数量，不展示虚构可用状态。
-- 旧版自动导入优先检查当前用户与系统标准数据目录，并保留历史 `E:\Tools\DynamicProxyManager` 作为兼容位置；公共版本不依赖个人磁盘布局。
-- 规则规划器：AI 严格出口不会故障回落到 `DIRECT`；中国大陆服务保持直连。
-- 推荐位编辑器：VPS/VPN/软件/硬件服务链接、优惠码和合作关系披露校验；发行者推荐目录使用内置公钥验签，用户本机推荐位与发行目录隔离。
-- Tauri 签名更新：HTTPS 清单、内置公钥验证、自动检查、确认安装和发布清单生成。
-- 已上线正式 HTTPS 更新清单；安装包和清单均在发布前后校验 SHA-256 与 Tauri 签名。
-- 远控防火墙向导：Sunshine 仅开放专用网络最小端口；RustDesk VPS 仅开放原生客户端最小端口，并提供对称回滚。
-- Sunshine 实测参数可事务写入官方配置：原文件哈希门禁、完整备份、用户改动冲突拒绝和一键回滚；不自动重启串流或改动网络代理。
-- OpenWrt / OpenClash 家庭网关支持 SSH 隔离预演、核心语法校验、固定目标原子下发、UCI 选择切换、服务重启失败自动恢复和冲突感知的一键回滚；不安装路由器软件或改动电脑代理。
-- 设备中心使用只读 SSH 自动发现 OpenWrt 能力、DHCP/IPv6 邻居和真实局域网设备；可按设备保存国内直连、AI、流媒体、游戏或下载场景，并把 DNS、IPv4、IPv6 策略加入同一个可回滚候选配置。
-- macOS 平台配置只打包 `engine-macos`，Developer ID 构建强制公证凭据门禁并复验 stapled ticket；Windows/macOS sidecar 不再混装。
-- Mac 构建包默认生成无需发布私钥的 ad-hoc 本机测试 DMG；`--release` 才启用 updater 签名、Developer ID 与 Apple 公证，测试版和正式版分目录保存。
+![AI Route Manager 总览界面](docs/images/dashboard.png)
 
-## 开发
+AI Route Manager 是一个基于 React、Tauri 和 Rust 的桌面网络策略管理器。它不会提供代理节点、VPN 账号或 VPS，而是帮助用户管理自己合法取得的连接：先生成候选配置，在隔离端口完成验证，再由用户确认是否应用；失败时恢复上一个已验证状态。
+
+## 核心能力
+
+- **场景分流**：分别管理 AI、游戏、流媒体、下载和国内直连策略。
+- **严格出口**：AI 严格策略没有合格出口时阻断，不静默回落到 `DIRECT`。
+- **安全预演**：候选核心在临时端口运行，验证结束后自动停止并清理临时凭据。
+- **凭据隔离**：订阅令牌和 VPS 密码写入 Windows Credential Manager 或 macOS Keychain，不进入普通日志。
+- **可恢复变更**：系统代理、Sunshine、防火墙和 OpenWrt/OpenClash 操作均采用备份、冲突检查与回滚流程。
+- **诊断与导出**：提供脱敏诊断、移动端配置导出、服务状态与托管修复入口。
+
+完整功能与实现边界见 [`docs/FEATURES.md`](docs/FEATURES.md)，安全模型见 [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md)。
+
+## 下载
+
+### Windows x64
+
+- [下载安装版 `AI-Route-Manager-1.0.6-Windows-x64-setup.exe`](https://github.com/netbreeze76/ai-route-manager/releases/download/v1.0.6/AI-Route-Manager-1.0.6-Windows-x64-setup.exe)
+- [下载便携版 `AI-Route-Manager-1.0.6-Windows-x64-portable.zip`](https://github.com/netbreeze76/ai-route-manager/releases/download/v1.0.6/AI-Route-Manager-1.0.6-Windows-x64-portable.zip)
+- [SHA-256 校验文件](https://github.com/netbreeze76/ai-route-manager/releases/download/v1.0.6/SHA256SUMS.txt)
+- [全部版本与发布说明](https://github.com/netbreeze76/ai-route-manager/releases)
+
+> [!IMPORTANT]
+> 当前公开二进制仅提供 Windows x64。安装包带有 Tauri 更新签名，但尚未购买 Windows Authenticode 商业代码签名，首次运行时 Windows 可能显示信誉提示。macOS 构建与公证脚本已经包含在源码中，但尚未发布经过公证的公共 DMG。
+
+## 快速开始
+
+1. 安装或解压 Windows 版本并启动程序。
+2. 在“线路与 VPS”中填写自己的稳定订阅和目标地区；下载订阅与固定 VPS 均为可选项。
+3. 保存配置。订阅令牌和密码将进入系统凭据库，界面和普通日志不会回显完整内容。
+4. 先运行“安全预演”，确认候选配置、端口和出口检查均通过。
+5. 检查预演结果后再选择“验证并应用”；停止托管时软件会恢复先前的系统代理状态。
+
+零基础说明见 [`docs/零基础安装与设置教程.md`](docs/%E9%9B%B6%E5%9F%BA%E7%A1%80%E5%AE%89%E8%A3%85%E4%B8%8E%E8%AE%BE%E7%BD%AE%E6%95%99%E7%A8%8B.md)。在修改网络、路由器或防火墙前，请保留当前可用配置和独立管理入口。
+
+## 支持范围
+
+| 项目 | 当前状态 |
+| --- | --- |
+| Windows x64 安装版与便携版 | 已公开发布 |
+| Windows 本机预演、托管、诊断与恢复 | 已实现并纳入 CI/回归测试 |
+| OpenWrt / OpenClash | 支持只读发现、隔离预演、原子下发与失败恢复 |
+| Sunshine / RustDesk | 支持最小防火墙向导、配置备份与回滚 |
+| macOS 源码构建 | 已提供脚本；公共公证 DMG 尚未发布 |
+| Android / iOS 原生应用 | 未发布；当前仅提供配置导出能力 |
+
+## 使用边界
+
+- 本项目不提供节点、订阅、VPN 账号、VPS、破解或规避第三方规则的服务。
+- 应用网络配置前必须先查看预演结果；远程操作时尤其需要保留独立恢复通道。
+- 推荐中心允许用户完全使用自己的服务。发行者推荐和返利关系必须明确披露，详见 [`docs/REFERRAL_POLICY.md`](docs/REFERRAL_POLICY.md)。
+- 使用者应遵守所在地法律法规和相关第三方服务条款。
+
+## 从源码运行
+
+### 前端与桌面开发
 
 ```powershell
-pnpm install
+pnpm install --frozen-lockfile
 pnpm check
 pnpm build
 pnpm tauri dev
 ```
 
-Rust 单元测试：
+### Rust 与 Python 测试
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --lib
+.\scripts\test-rust-gnu.ps1
+python -m pip install --requirement engine\requirements.txt
+python -m unittest discover -s engine -p "test_*.py" -v
 ```
 
-## 原则
+Windows 构建细节由 [`scripts/`](scripts/) 中的可复现脚本维护；macOS 构建与公证流程见 [`docs/BUILD_MACOS.md`](docs/BUILD_MACOS.md)。
 
-1. 先预演、再探测、再应用；应用失败恢复上一个已验证配置。
-2. AI 严格策略只允许同地区批准出口或阻断，不静默直连。
-3. 订阅令牌、VPS 密码和私钥不进入前端日志或普通配置文件。
-4. 合作推广链接必须清楚说明链接关系，且始终允许自带服务。
-5. Steam 功能只做账户地区一致性和流量拆分，不提供价格区规避。
-6. 更新私钥不进入仓库或安装包；更新源只能提供通过内置公钥验证的签名产物。
-7. 平台推荐目录验签失败即拒绝加载；用户可单独关闭发行者推荐而保留本机自定义推荐位。
-
-## 合法使用与商业关系披露
-
-AI Route Manager 只是管理用户自行合法取得的网络连接、路由策略与远程工具的管理软件，不提供节点、账号、翻墙、破解、越狱或其他违法服务。使用者必须遵守所在地法律法规及第三方服务条款，并自行确认配置、访问与使用行为合法合规。
-
-推荐中心将直接赞赏与推荐返利分开展示。返利链接会明确披露开发者可能获得佣金，不增加用户价格，也不影响用户使用自有服务。发布前检查清单见 [`docs/SUPPORT_AND_DISCLOSURE.md`](docs/SUPPORT_AND_DISCLOSURE.md)。
-
-详细设计见 [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)。
-
-## 源码结构
+## 项目结构
 
 - `src/`：React/TypeScript 桌面界面。
-- `src-tauri/`：Rust/Tauri 本地后端与系统集成。
+- `src-tauri/`：Rust/Tauri 后端、系统集成与桌面打包配置。
 - `engine/`：DynamicProxyEngine 的 Python 源码与回归测试。
-- `scripts/`：可复现构建、签名、校验与打包脚本。
-- `THIRD_PARTY_NOTICES.md`：内置 Mihomo 与地理数据库的来源、许可证和哈希。
+- `scripts/`：构建、签名、校验、发布和回滚脚本。
+- `docs/`：安装、功能、安全、远控、更新与网关文档。
 
-生成的安装包、签名私钥、本机凭据、运行状态和诊断归档不会提交到源码仓库。
+## 参与项目
+
+- 提交代码前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)。
+- 安全问题请按 [`SECURITY.md`](SECURITY.md) 私下报告；不要在公开 Issue 中粘贴订阅链接、密码、Cookie、私钥或未脱敏诊断文件。
+- 版本变化见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 许可证
 
-本项目以 [`GPL-3.0-only`](LICENSE) 发布。内置第三方组件保留各自许可证；
-完整归属和对应源码位置见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
-
-提交问题前请先阅读 [`SECURITY.md`](SECURITY.md)，不要在公开 Issue 中粘贴订阅链接、
-密码、Cookie、私钥或未经脱敏的诊断文件。
+项目源码以 [`GPL-3.0-only`](LICENSE) 发布。内置第三方组件保留各自许可证、来源和归属，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
