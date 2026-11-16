@@ -50,12 +50,29 @@ SLOTS = (
 )
 AI_TEST_URL = "https://api.openai.com/v1/models"
 AI_EXPECTED_STATUS = 401
+GROK_TEST_URL = "https://api.x.ai/v1/models"
+GROK_EXPECTED_STATUS = 401
+X_WEB_TEST_URL = "https://x.com/robots.txt"
+X_WEB_EXPECTED_STATUS = 200
+GROK_DELAY_TIMEOUT_MS = 10000
+GEMINI_GROUP = "Gemini-智能"
+CUSTOM_ROUTE_TARGETS = {
+    "direct": "DIRECT",
+    "download": "下载线路",
+    "ai": "AI-智能",
+    "fixed": "AI-固定出口",
+    "gemini": GEMINI_GROUP,
+}
+GEMINI_TEST_URL = "https://gemini.google.com/generate_204"
+GEMINI_EXPECTED_STATUS = 204
+GEMINI_API_TEST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_API_EXPECTED_STATUS = 403
 AI_REGION_TRACE_URL = "https://chatgpt.com/cdn-cgi/trace"
 LEGACY_AI_REGION = "SG"
 LEGACY_AI_REGION_LABEL = "新加坡"
 LEGACY_PREFERRED_NODE_KEYWORDS = ("李家坡2-直连", "李家坡2-直連")
 FIXED_EGRESS_GROUP = "AI-固定出口"
-FIXED_EGRESS_DEFAULT_NAME = "AI-固定出口"
+FIXED_EGRESS_DEFAULT_NAME = "AI-固定出口节点"
 SSH_SOCKS_PORT = 18443
 FULL_CHAIN_CANDIDATE_LIMIT = 6
 TRANSPORT_TEST_URL = "https://www.google.com/generate_204"
@@ -63,6 +80,10 @@ TRANSPORT_EXPECTED_STATUS = 204
 DOWNLOAD_TEST_URL = "https://telegram.org"
 PROBES = (
     ("chatgpt", AI_TEST_URL, AI_EXPECTED_STATUS),
+    ("grok_api", GROK_TEST_URL, GROK_EXPECTED_STATUS),
+    ("x_web", X_WEB_TEST_URL, X_WEB_EXPECTED_STATUS),
+    ("gemini_web", GEMINI_TEST_URL, GEMINI_EXPECTED_STATUS),
+    ("gemini_api", GEMINI_API_TEST_URL, GEMINI_API_EXPECTED_STATUS),
     ("claude", "https://claude.ai/cdn-cgi/trace", 200),
     ("google", "https://www.google.com/generate_204", 204),
     ("youtube", "https://www.youtube.com/generate_204", 204),
@@ -417,6 +438,32 @@ def make_chained_region_exits(
     return result
 
 
+def normalize_custom_routes(value: Any) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ManagerError("custom_routes must be a list")
+    if len(value) > 100:
+        raise ManagerError("custom_routes exceeds 100 entries")
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    domain_pattern = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ManagerError("custom route entry must be an object")
+        domain = str(entry.get("domain", "")).strip().lower().rstrip(".")
+        channel = str(entry.get("channel", "")).strip().lower()
+        if not domain_pattern.fullmatch(domain):
+            raise ManagerError(f"invalid custom route domain: {domain or '<empty>'}")
+        if domain in seen:
+            raise ManagerError(f"duplicate custom route domain: {domain}")
+        if channel not in CUSTOM_ROUTE_TARGETS:
+            raise ManagerError(f"invalid custom route channel: {channel or '<empty>'}")
+        seen.add(domain)
+        result.append({"domain": domain, "channel": channel})
+    return result
+
+
 def make_fixed_egress_proxy(
     settings: dict[str, Any],
     dialer_proxy: str,
@@ -479,6 +526,15 @@ def make_url_test(
     return group
 
 
+def rank_candidates_by_delay(candidates: list[str], delays: dict[str, int]) -> list[str]:
+    """Keep Grok-reachable candidates and rank them by measured latency."""
+    original_order = {name: index for index, name in enumerate(candidates)}
+    return sorted(
+        (name for name in candidates if isinstance(delays.get(name), int) and delays[name] >= 0),
+        key=lambda name: (delays[name], original_order[name]),
+    )
+
+
 def build_config(
     stable: list[dict[str, Any]],
     download1: list[dict[str, Any]],
@@ -488,6 +544,7 @@ def build_config(
     ai_region: str = LEGACY_AI_REGION,
     ai_region_label: str = LEGACY_AI_REGION_LABEL,
     preferred_keywords: list[str] | None = None,
+    custom_routes: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not stable:
         raise ManagerError("stable subscription yielded zero usable nodes")
@@ -544,31 +601,36 @@ def build_config(
         # Keep the generated automatic transport as a final compatibility fallback.
         fixed_chain_proxies.append(fixed_proxy)
         fixed_chain_names.append(fixed_proxy["name"])
+        # Every candidate exits from the same fixed VPS. Select the transport
+        # that is actually fastest to Grok instead of the first healthy entry.
         groups.append(
-            {
-                "name": FIXED_EGRESS_GROUP,
-                "type": "fallback",
-                "proxies": fixed_chain_names,
-                "url": AI_TEST_URL,
-                "expected-status": AI_EXPECTED_STATUS,
-                "interval": 300,
-                "lazy": False,
-            }
+            make_url_test(
+                FIXED_EGRESS_GROUP,
+                fixed_chain_names,
+                GROK_TEST_URL,
+                60,
+                GROK_EXPECTED_STATUS,
+            )
         )
         ai_children.append(FIXED_EGRESS_GROUP)
-    else:
-        if classes["exact"]:
-            groups.append(make_url_test("AI-指定节点", classes["exact"], AI_TEST_URL, 120, AI_EXPECTED_STATUS))
-            ai_children.append("AI-指定节点")
-        if classes["region_direct"] and set(classes["region_direct"]) != set(classes["exact"]):
-            groups.append(make_url_test("AI-目标地区直连", classes["region_direct"], AI_TEST_URL, 180, AI_EXPECTED_STATUS))
-            ai_children.append("AI-目标地区直连")
-        if classes["region_any"] and not ai_children:
-            groups.append(make_url_test("AI-目标地区自动", classes["region_any"], AI_TEST_URL, 180, AI_EXPECTED_STATUS))
-            ai_children.append("AI-目标地区自动")
-        if chained_exit_names:
-            groups.append(make_url_test("AI-目标地区双层", chained_exit_names, AI_TEST_URL, 180, AI_EXPECTED_STATUS))
-            ai_children.append("AI-目标地区双层")
+
+    # The configured fixed exit is always the first AI candidate. Regional
+    # smart routes remain availability fallbacks only; DIRECT is never added
+    # to this group and the fixed-egress group is never replaced or removed.
+    smart_children: list[str] = []
+    if classes["exact"]:
+        groups.append(make_url_test("AI-指定节点", classes["exact"], AI_TEST_URL, 120, AI_EXPECTED_STATUS))
+        smart_children.append("AI-指定节点")
+    if classes["region_direct"] and set(classes["region_direct"]) != set(classes["exact"]):
+        groups.append(make_url_test("AI-目标地区直连", classes["region_direct"], AI_TEST_URL, 180, AI_EXPECTED_STATUS))
+        smart_children.append("AI-目标地区直连")
+    if classes["region_any"] and not smart_children:
+        groups.append(make_url_test("AI-目标地区自动", classes["region_any"], AI_TEST_URL, 180, AI_EXPECTED_STATUS))
+        smart_children.append("AI-目标地区自动")
+    if chained_exit_names:
+        groups.append(make_url_test("AI-目标地区双层", chained_exit_names, AI_TEST_URL, 180, AI_EXPECTED_STATUS))
+        smart_children.append("AI-目标地区双层")
+    ai_children.extend(smart_children)
     if not ai_children:
         raise ManagerError(f"no {ai_region} AI exit candidates were found")
     groups.insert(
@@ -583,6 +645,22 @@ def build_config(
             "lazy": False,
         },
     )
+    # Keep Gemini's health check and custom-route channel, but delegate its
+    # traffic to the same fail-closed AI path as ChatGPT and Claude. Regional
+    # or provider-labelled Gemini nodes must never bypass the fixed egress.
+    gemini_children = ["AI-智能"]
+    groups.insert(
+        1,
+        {
+            "name": GEMINI_GROUP,
+            "type": "fallback",
+            "proxies": gemini_children,
+            "url": GEMINI_TEST_URL,
+            "expected-status": GEMINI_EXPECTED_STATUS,
+            "interval": 60,
+            "lazy": False,
+        },
+    )
 
     download_children: list[str] = []
     if d1_names:
@@ -591,9 +669,8 @@ def build_config(
     if d2_names:
         groups.append(make_url_test("下载源2", d2_names, DOWNLOAD_TEST_URL, 120))
         download_children.append("下载源2")
-    # Non-AI traffic must never spill into the fixed AI egress.  The stable
-    # subscription transport is the final compatibility path for ordinary
-    # foreign traffic; it keeps the VPS identity isolated to explicit AI rules.
+    # Only explicitly classified high-volume traffic enters this pool.  AI
+    # traffic stays on the fixed egress and unmatched traffic stays DIRECT.
     download_children.append(transport_group)
     groups.append(
         {
@@ -605,7 +682,11 @@ def build_config(
             "lazy": False,
         }
     )
+    custom_routes = normalize_custom_routes(custom_routes)
     rules = [
+        f"DOMAIN-SUFFIX,{item['domain']},{CUSTOM_ROUTE_TARGETS[item['channel']]}"
+        for item in custom_routes
+    ] + [
         "PROCESS-NAME,Telegram.exe,下载线路",
         "DOMAIN-SUFFIX,telegram.org,下载线路",
         "DOMAIN-SUFFIX,t.me,下载线路",
@@ -622,18 +703,33 @@ def build_config(
         "DOMAIN-SUFFIX,googlevideo.com,下载线路",
         "DOMAIN-SUFFIX,ytimg.com,下载线路",
         "DOMAIN,youtubei.googleapis.com,下载线路",
+        "DOMAIN-SUFFIX,steamcontent.com,下载线路",
+        "DOMAIN-SUFFIX,steamserver.net,下载线路",
+        "DOMAIN-SUFFIX,steamusercontent.com,下载线路",
+        "DOMAIN,steamcdn-a.akamaihd.net,下载线路",
     ]
     # Steam cloud is intentionally direct and must appear before the broad
     # googleapis AI rule.
     rules += [
         "DOMAIN-SUFFIX,storage.googleapis.com,DIRECT",
         "DOMAIN-KEYWORD,steamcloud,DIRECT",
+        f"DOMAIN,{GEMINI_API_TEST_URL.split('/')[2]},{GEMINI_GROUP}",
+        f"DOMAIN-SUFFIX,one.google.com,{GEMINI_GROUP}",
+        f"DOMAIN,accounts.google.com,{GEMINI_GROUP}",
+        f"DOMAIN,myaccount.google.com,{GEMINI_GROUP}",
+        f"DOMAIN,pay.google.com,{GEMINI_GROUP}",
+        f"DOMAIN,payments.google.com,{GEMINI_GROUP}",
+        f"GEOSITE,google-gemini,{GEMINI_GROUP}",
+        f"DOMAIN-SUFFIX,google,{GEMINI_GROUP}",
+        f"DOMAIN-SUFFIX,google.dev,{GEMINI_GROUP}",
+        f"DOMAIN-SUFFIX,usercontent.goog,{GEMINI_GROUP}",
     ]
     for domain in (
         "chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com",
         "anthropic.com", "claude.ai", "claudeusercontent.com", "google.com",
         "googleapis.com", "gstatic.com", "googleusercontent.com", "ggpht.com",
-        "googleai.com", "deepmind.com", "x.ai", "grok.com", "perplexity.ai",
+        "googleai.com", "deepmind.com", "x.ai", "grok.com", "x.com",
+        "twitter.com", "twimg.com", "t.co", "perplexity.ai",
         "poe.com", "cohere.com", "cohere.ai", "mistral.ai", "huggingface.co",
         "cursor.com", "cursor.sh",
     ):
@@ -642,7 +738,7 @@ def build_config(
         "DOMAIN,api.githubcopilot.com,AI-智能",
         "GEOSITE,cn,DIRECT",
         "GEOIP,CN,DIRECT,no-resolve",
-        "MATCH,下载线路",
+        "MATCH,DIRECT",
     ]
 
     config = {
@@ -689,6 +785,10 @@ def build_config(
         "full_chain_candidates": fixed_chain_names,
         "stable_frontend_port": FRONTEND_PORT,
         "ai_chain": ai_children,
+        "gemini_group": GEMINI_GROUP,
+        "gemini_candidates": gemini_children,
+        "default_route": "DIRECT",
+        "custom_routes": len(custom_routes),
     }
     return config, summary
 
@@ -719,6 +819,7 @@ class DynamicProxyManager:
         if not isinstance(raw_keywords, list):
             raise ManagerError("preferred_node_keywords must be a list")
         self.preferred_node_keywords = [str(item).strip() for item in raw_keywords if str(item).strip()]
+        self.custom_routes = normalize_custom_routes(profile.get("custom_routes") if profile else None)
         self.stop_requested = False
         home.mkdir(parents=True, exist_ok=True)
         signal.signal(signal.SIGINT, self._request_stop)
@@ -817,6 +918,7 @@ class DynamicProxyManager:
             self.ai_region,
             self.ai_region_label,
             self.preferred_node_keywords,
+            self.custom_routes,
         )
         slot_home = self.home / f"slot-{slot['name']}"
         slot_home.mkdir(parents=True, exist_ok=True)
@@ -846,7 +948,56 @@ class DynamicProxyManager:
         if result.returncode != 0:
             raise ManagerError("candidate syntax test failed")
 
+    def reclaim_stale_candidate_slot(self, slot: dict[str, Any]) -> bool:
+        """Retire a proven inactive predecessor that still owns this slot.
+
+        A deployment can stop the manager while the five-minute drain thread is
+        sleeping.  The old core then survives without its manager and blocks the
+        next blue/green candidate.  Reclaim only when both target listeners are
+        owned by the recorded predecessor and both active listeners are owned by
+        the different, currently recorded active core.
+        """
+        if not (port_open(slot["proxy_port"]) or port_open(slot["controller_port"])):
+            return False
+        state = self.state()
+        previous = state.get("previous") or {}
+        stale_pid = previous.get("active_pid")
+        active_pid = state.get("active_pid")
+        active_proxy = state.get("active_proxy_port")
+        active_controller = state.get("active_controller_port")
+        if (
+            state.get("active_slot") == slot["name"]
+            or previous.get("active_slot") != slot["name"]
+            or not isinstance(stale_pid, int)
+            or not isinstance(active_pid, int)
+            or stale_pid == active_pid
+            or not isinstance(active_proxy, int)
+            or not isinstance(active_controller, int)
+            or listener_owner(slot["proxy_port"]) != stale_pid
+            or listener_owner(slot["controller_port"]) != stale_pid
+            or listener_owner(active_proxy) != active_pid
+            or listener_owner(active_controller) != active_pid
+        ):
+            return False
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(stale_pid), "/T", "/F"],
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=15,
+            )
+        else:
+            os.kill(stale_pid, signal.SIGTERM)
+        deadline = time.time() + 15
+        while time.time() < deadline and (port_open(slot["proxy_port"]) or port_open(slot["controller_port"])):
+            time.sleep(0.25)
+        if port_open(slot["proxy_port"]) or port_open(slot["controller_port"]):
+            raise ManagerError(f"stale candidate slot {slot['name']} did not close")
+        self.log.write("stale_candidate_slot_reclaimed", slot=slot["name"], pid=stale_pid)
+        return True
+
     def start_candidate(self, config_path: Path, slot: dict[str, Any]) -> int:
+        self.reclaim_stale_candidate_slot(slot)
         if port_open(slot["proxy_port"]) or port_open(slot["controller_port"]):
             raise ManagerError(f"candidate slot {slot['name']} ports already occupied")
         out = (config_path.parent / "core.log").open("a", encoding="utf-8")
@@ -913,12 +1064,18 @@ class DynamicProxyManager:
             last_error: Exception | None = None
             for attempt in range(1, 4):
                 try:
-                    response = session.get(url, proxies={"http": proxy, "https": proxy}, timeout=(10, 30), allow_redirects=True)
-                    result[name] = response.status_code
-                    if response.status_code == expected:
-                        last_error = None
-                        break
-                    last_error = ManagerError(f"probe {name} returned {response.status_code}, expected {expected}")
+                    with session.get(
+                        url,
+                        proxies={"http": proxy, "https": proxy},
+                        timeout=(10, 30),
+                        allow_redirects=True,
+                        stream=True,
+                    ) as response:
+                        result[name] = response.status_code
+                        if response.status_code == expected:
+                            last_error = None
+                            break
+                        last_error = ManagerError(f"probe {name} returned {response.status_code}, expected {expected}")
                 except Exception as exc:
                     last_error = exc
                 self.log.write("probe_retry", name=name, attempt=attempt, error=type(last_error).__name__)
@@ -963,7 +1120,28 @@ class DynamicProxyManager:
             group = proxies.get(group_name)
             if not isinstance(group, dict):
                 continue
-            for node_name in group.get("all", []):
+            candidates = [str(name) for name in group.get("all", [])]
+            delays: dict[str, int] = {}
+            for node_name in candidates:
+                try:
+                    measured = requests.get(
+                        f"{controller}/proxies/{quote(node_name, safe='')}/delay",
+                        params={"url": GROK_TEST_URL, "timeout": GROK_DELAY_TIMEOUT_MS},
+                        timeout=12,
+                    )
+                    measured.raise_for_status()
+                    delay = int(measured.json().get("delay", -1))
+                    if delay >= 0:
+                        delays[node_name] = delay
+                        self.log.write("ai_exit_latency", group=group_name, node=node_name, grok_delay_ms=delay)
+                except Exception as exc:
+                    self.log.write(
+                        "ai_exit_latency_failed",
+                        group=group_name,
+                        node=node_name,
+                        error=type(exc).__name__,
+                    )
+            for node_name in rank_candidates_by_delay(candidates, delays):
                 try:
                     selected = requests.put(
                         f"{controller}/proxies/{quote(group_name, safe='')}",
@@ -982,11 +1160,26 @@ class DynamicProxyManager:
                     session.trust_env = False
                     route = {"http": proxy_url, "https": proxy_url}
                     api = session.get(AI_TEST_URL, proxies=route, timeout=(10, 30), allow_redirects=True)
+                    grok = session.get(GROK_TEST_URL, proxies=route, timeout=(10, 30), allow_redirects=True)
+                    x_web = session.get(X_WEB_TEST_URL, proxies=route, timeout=(10, 30), allow_redirects=True)
                     trace = session.get(AI_REGION_TRACE_URL, proxies=route, timeout=(10, 30), allow_redirects=True)
                     region = trace_region(trace.text)
                     exit_ip = trace_ip(trace.text)
-                    if api.status_code == AI_EXPECTED_STATUS and trace.status_code == 200 and region == self.ai_region and (not expected_ip or exit_ip == expected_ip):
-                        result = {"group": group_name, "node": str(node_name), "region": region, "ip": exit_ip or "unknown"}
+                    if (
+                        api.status_code == AI_EXPECTED_STATUS
+                        and grok.status_code == GROK_EXPECTED_STATUS
+                        and x_web.status_code == X_WEB_EXPECTED_STATUS
+                        and trace.status_code == 200
+                        and region == self.ai_region
+                        and (not expected_ip or exit_ip == expected_ip)
+                    ):
+                        result = {
+                            "group": group_name,
+                            "node": str(node_name),
+                            "region": region,
+                            "ip": exit_ip or "unknown",
+                            "grok_delay_ms": str(delays[node_name]),
+                        }
                         self.log.write("ai_exit_selected", **result)
                         return result
                     self.log.write(
@@ -994,6 +1187,8 @@ class DynamicProxyManager:
                         group=group_name,
                         node=node_name,
                         api_status=api.status_code,
+                        grok_status=grok.status_code,
+                        x_web_status=x_web.status_code,
                         region=(region or "unknown"),
                         exit_ip=(exit_ip or "unknown"),
                     )
@@ -1004,14 +1199,14 @@ class DynamicProxyManager:
                         node=node_name,
                         error=type(exc).__name__,
                     )
-        raise ManagerError(f"no candidate produced a verified {self.ai_region} AI exit")
+        raise ManagerError(f"no Grok/X-capable candidate produced a verified {self.ai_region} AI exit")
 
     def group_state(self, slot: dict[str, Any]) -> dict[str, Any]:
         response = requests.get(f"http://127.0.0.1:{slot['controller_port']}/proxies", timeout=10)
         response.raise_for_status()
         proxies = response.json().get("proxies", {})
         result = {}
-        for name in ("AI-智能", FIXED_EGRESS_GROUP, "AI-指定节点", "AI-目标地区直连", "AI-目标地区自动", "AI-目标地区双层", "AI-前置稳定", "下载线路"):
+        for name in ("AI-智能", GEMINI_GROUP, FIXED_EGRESS_GROUP, "AI-指定节点", "AI-目标地区直连", "AI-目标地区自动", "AI-目标地区双层", "AI-前置稳定", "下载线路"):
             if name in proxies:
                 result[name] = {"type": proxies[name].get("type"), "now": proxies[name].get("now"), "count": len(proxies[name].get("all", []))}
         self.log.write("group_state", groups=json.dumps(result, ensure_ascii=False))

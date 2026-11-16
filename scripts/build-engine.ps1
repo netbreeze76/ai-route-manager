@@ -18,6 +18,7 @@ foreach ($required in @($source, (Join-Path $staging 'bin\mihomo.exe'))) {
     }
 }
 
+New-Item -ItemType Directory -Path $engineBuild -Force | Out-Null
 Push-Location $engineBuild
 try {
     & $python -m pip install --disable-pip-version-check --requirement (Join-Path $PSScriptRoot 'requirements-engine.txt')

@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 #[cfg(all(feature = "desktop-runtime", target_os = "windows"))]
 use std::net::TcpListener;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::OsStr,
     fs,
     net::{SocketAddr, TcpStream, ToSocketAddrs},
@@ -285,6 +285,30 @@ struct ProfileSummary {
     preferred_node_keywords: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CustomRouteRule {
+    #[serde(default)]
+    label: String,
+    domain: String,
+    channel: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomRoutesEnvelope {
+    version: u32,
+    rules: Vec<CustomRouteRule>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomRouteUpdateReport {
+    rules: Vec<CustomRouteRule>,
+    applied: bool,
+    message: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewReport {
@@ -304,6 +328,37 @@ struct ManagedStatus {
     system_proxy: Option<String>,
     legacy_conflict: bool,
     message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EgressSafetyCheck {
+    id: String,
+    title: String,
+    state: String,
+    critical: bool,
+    evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EgressSafetyReport {
+    checked_at_ms: u64,
+    ready: bool,
+    critical_failures: usize,
+    warnings: usize,
+    checks: Vec<EgressSafetyCheck>,
+    message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct LocalProxyObservation {
+    wininet_enabled: Option<bool>,
+    wininet_server: Option<String>,
+    user_http_proxy: Option<String>,
+    user_https_proxy: Option<String>,
+    winhttp_enabled: Option<bool>,
+    winhttp_server: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -556,6 +611,8 @@ struct LocalBackupEnvelope {
     offers: Vec<ReferralOffer>,
     #[serde(default)]
     gateway_policies: Vec<GatewayDevicePolicy>,
+    #[serde(default)]
+    custom_routes: Vec<CustomRouteRule>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -974,6 +1031,88 @@ fn gateway_policies_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_config_dir()
         .map_err(|error| format!("无法确定家庭网关策略目录：{error}"))?;
     Ok(directory.join("gateway-policies.json"))
+}
+
+#[cfg(feature = "desktop-runtime")]
+fn custom_routes_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("custom-routes.json"))
+        .map_err(|error| format!("无法确定自定义分流目录：{error}"))
+}
+
+fn normalize_custom_route_domain(value: &str) -> Result<String, String> {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return Err("网站域名不能为空".to_owned());
+    }
+    let candidate = if raw.contains("://") {
+        raw.to_owned()
+    } else {
+        format!("https://{raw}")
+    };
+    let parsed = Url::parse(&candidate).map_err(|_| format!("网站格式无效：{raw}"))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("网站地址不能包含用户名或密码".to_owned());
+    }
+    let domain = parsed
+        .host_str()
+        .ok_or_else(|| format!("网站缺少域名：{raw}"))?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if domain.len() > 253 || !domain.contains('.') {
+        return Err(format!("请输入完整网站域名：{domain}"));
+    }
+    if domain.split('.').any(|label| {
+        label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    }) {
+        return Err(format!("网站域名格式无效：{domain}"));
+    }
+    Ok(domain)
+}
+
+fn validate_custom_routes(routes: &[CustomRouteRule]) -> Result<Vec<CustomRouteRule>, String> {
+    if routes.len() > 100 {
+        return Err("自定义网站分流最多保存 100 条".to_owned());
+    }
+    let allowed = ["direct", "download", "ai", "fixed", "gemini"];
+    let mut seen = HashSet::new();
+    let mut group_channels: HashMap<String, String> = HashMap::new();
+    let mut normalized = Vec::with_capacity(routes.len());
+    for route in routes {
+        let domain = normalize_custom_route_domain(&route.domain)?;
+        let channel = route.channel.trim().to_ascii_lowercase();
+        let label = route.label.trim().to_owned();
+        if label.chars().count() > 60 || label.chars().any(char::is_control) {
+            return Err(format!("{domain} 的服务组名称无效"));
+        }
+        if !allowed.contains(&channel.as_str()) {
+            return Err(format!("{domain} 的渠道无效：{}", route.channel));
+        }
+        if !seen.insert(domain.clone()) {
+            return Err(format!("网站重复：{domain}"));
+        }
+        if !label.is_empty() {
+            if let Some(existing) = group_channels.get(&label)
+                && existing != &channel
+            {
+                return Err(format!("服务组 {label} 不能同时使用多个渠道"));
+            }
+            group_channels.insert(label.clone(), channel.clone());
+        }
+        normalized.push(CustomRouteRule {
+            label,
+            domain,
+            channel,
+        });
+    }
+    Ok(normalized)
 }
 
 fn validate_referral_offers_inner(offers: &[ReferralOffer]) -> ValidationResult {
@@ -1522,6 +1661,8 @@ fn load_backup_envelope() -> Result<LocalBackupEnvelope, String> {
     }
     validate_gateway_policies(&backup.gateway_policies)
         .map_err(|error| format!("备份家庭网关策略无效：{error}"))?;
+    validate_custom_routes(&backup.custom_routes)
+        .map_err(|error| format!("备份自定义分流无效：{error}"))?;
     Ok(backup)
 }
 
@@ -3291,13 +3432,17 @@ fn unique_preview_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(cache.join(format!("engine-preview-{}-{stamp}", std::process::id())))
 }
 
-fn engine_profile_bytes(profile: &ConnectionProfile) -> Result<Vec<u8>, String> {
+fn engine_profile_bytes(
+    profile: &ConnectionProfile,
+    custom_routes: &[CustomRouteRule],
+) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&serde_json::json!({
         "subscriptions": profile.subscriptions,
         "fixed_egress": profile.fixed_egress,
         "ai_region": profile.ai_region.trim().to_ascii_uppercase(),
         "ai_region_label": profile.ai_region_label.trim(),
         "preferred_node_keywords": profile.preferred_node_keywords,
+        "custom_routes": custom_routes,
     }))
     .map_err(|error| format!("无法序列化引擎配置：{error}"))
 }
@@ -3566,11 +3711,419 @@ fn managed_status(app: &tauri::AppHandle) -> ManagedStatus {
     }
 }
 
+fn parse_registry_value(output: &str, name: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        let name_index = fields
+            .iter()
+            .position(|field| field.eq_ignore_ascii_case(name))?;
+        let type_index = fields
+            .iter()
+            .enumerate()
+            .skip(name_index + 1)
+            .find_map(|(index, field)| field.starts_with("REG_").then_some(index))?;
+        (type_index + 1 < fields.len()).then(|| fields[type_index + 1..].join(" "))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn query_windows_registry_value(key: &str, name: &str) -> Option<String> {
+    let output = hidden_command("reg.exe")
+        .args(["query", key, "/v", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_registry_value(&decode_windows_text(&output.stdout), name)
+}
+
+#[cfg(target_os = "windows")]
+fn observe_local_proxy() -> LocalProxyObservation {
+    let internet_settings = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    let wininet_enabled = query_windows_registry_value(internet_settings, "ProxyEnable").and_then(
+        |value| match value.as_str() {
+            "0x1" | "1" => Some(true),
+            "0x0" | "0" => Some(false),
+            _ => None,
+        },
+    );
+    let wininet_server = query_windows_registry_value(internet_settings, "ProxyServer");
+    let user_http_proxy = query_windows_registry_value(r"HKCU\Environment", "HTTP_PROXY");
+    let user_https_proxy = query_windows_registry_value(r"HKCU\Environment", "HTTPS_PROXY");
+    let winhttp = hidden_command("netsh.exe")
+        .args(["winhttp", "show", "advproxy", "setting-scope=user"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| decode_windows_text(&output.stdout));
+    let winhttp_json = winhttp.as_deref().and_then(|text| {
+        let start = text.find('{')?;
+        let end = text.rfind('}')?;
+        serde_json::from_str::<serde_json::Value>(&text[start..=end]).ok()
+    });
+    LocalProxyObservation {
+        wininet_enabled,
+        wininet_server,
+        user_http_proxy,
+        user_https_proxy,
+        winhttp_enabled: winhttp_json
+            .as_ref()
+            .and_then(|value| value.get("ProxyIsEnabled"))
+            .and_then(serde_json::Value::as_bool),
+        winhttp_server: winhttp_json
+            .as_ref()
+            .and_then(|value| value.get("Proxy"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn observe_local_proxy() -> LocalProxyObservation {
+    LocalProxyObservation::default()
+}
+
+fn proxy_value_matches(value: Option<&str>, expected: &str) -> bool {
+    value.is_some_and(|value| {
+        let normalized = value.trim().trim_end_matches('/');
+        normalized.eq_ignore_ascii_case(expected)
+            || normalized.eq_ignore_ascii_case(&format!("http://{expected}"))
+            || normalized.eq_ignore_ascii_case(&format!("https://{expected}"))
+    })
+}
+
+fn build_egress_safety_report(
+    preferences: &Preferences,
+    profile: Option<&ConnectionProfile>,
+    managed: &ManagedStatus,
+    state: Option<&serde_json::Value>,
+    stable_listener: bool,
+    observation: &LocalProxyObservation,
+    process_http_proxy: Option<&str>,
+    process_https_proxy: Option<&str>,
+    windows_platform: bool,
+) -> EgressSafetyReport {
+    let mut checks = Vec::<EgressSafetyCheck>::new();
+    let mut add = |id: &str, title: &str, state: &str, critical: bool, evidence: String| {
+        checks.push(EgressSafetyCheck {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            state: state.to_owned(),
+            critical,
+            evidence,
+        });
+    };
+    let expected = format!("127.0.0.1:{STABLE_FRONTEND_PORT}");
+
+    add(
+        "managed-runtime",
+        "托管核心与活动监听",
+        if managed.running && managed.listener {
+            "passed"
+        } else {
+            "failed"
+        },
+        true,
+        if managed.running && managed.listener {
+            format!(
+                "管理进程和活动核心均可达；活动端口 {}。",
+                managed
+                    .active_proxy_port
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "未记录".to_owned())
+            )
+        } else {
+            "管理进程或活动核心不可达；出口安全门保持未就绪。".to_owned()
+        },
+    );
+    add(
+        "stable-frontdoor",
+        "稳定入口",
+        if stable_listener { "passed" } else { "failed" },
+        true,
+        if stable_listener {
+            format!("{expected} 正在监听，并只转发到已提交的活动槽。")
+        } else {
+            format!("{expected} 未监听；应用不应声称系统代理已受托管。")
+        },
+    );
+
+    let active_slot = state
+        .and_then(|value| value.get("active_slot"))
+        .and_then(serde_json::Value::as_str);
+    let expected_slot = match managed.active_proxy_port {
+        Some(27898) => Some("A"),
+        Some(27899) => Some("B"),
+        _ => None,
+    };
+    let slot_passed = active_slot.is_some() && active_slot == expected_slot;
+    add(
+        "active-slot",
+        "活动槽身份",
+        if slot_passed { "passed" } else { "failed" },
+        true,
+        if slot_passed {
+            format!(
+                "状态文件中的槽 {} 与活动端口一致。",
+                active_slot.unwrap_or_default()
+            )
+        } else {
+            "活动槽、端口或状态记录不一致；拒绝把监听存在误判为已提交。".to_owned()
+        },
+    );
+
+    if windows_platform {
+        let wininet_passed = observation.wininet_enabled == Some(true)
+            && proxy_value_matches(observation.wininet_server.as_deref(), &expected);
+        add(
+            "wininet-owner",
+            "Windows 系统代理归属",
+            if wininet_passed {
+                "passed"
+            } else if observation.wininet_enabled.is_none() {
+                "unknown"
+            } else {
+                "failed"
+            },
+            true,
+            if wininet_passed {
+                format!("WinINET 已启用并指向 {expected}。")
+            } else {
+                "WinINET 未能证明指向稳定入口；关键证据不完整时保持未就绪。".to_owned()
+            },
+        );
+        let winhttp_passed = observation.winhttp_enabled == Some(true)
+            && proxy_value_matches(observation.winhttp_server.as_deref(), &expected);
+        add(
+            "winhttp-compatibility",
+            "用户级 WinHTTP",
+            if winhttp_passed {
+                "passed"
+            } else if observation.winhttp_enabled.is_none() {
+                "unknown"
+            } else {
+                "warning"
+            },
+            false,
+            if winhttp_passed {
+                format!("用户级 WinHTTP 已指向 {expected}。")
+            } else {
+                "用户级 WinHTTP 未能确认稳定入口；部分命令行程序可能使用不同路径。".to_owned()
+            },
+        );
+    } else {
+        add(
+            "system-proxy-owner",
+            "系统代理归属",
+            "unknown",
+            false,
+            "当前平台尚未提供与 Windows 同等粒度的系统代理读取证据。".to_owned(),
+        );
+    }
+
+    let default_route = state
+        .and_then(|value| value.pointer("/summary/default_route"))
+        .and_then(serde_json::Value::as_str);
+    add(
+        "default-route",
+        "未匹配流量默认出口",
+        if default_route == Some("DIRECT") {
+            "passed"
+        } else if default_route.is_none() {
+            "unknown"
+        } else {
+            "failed"
+        },
+        true,
+        if default_route == Some("DIRECT") {
+            "运行态明确记录 MATCH,DIRECT；普通流量不会静默落入下载线路。".to_owned()
+        } else {
+            "运行态未能证明默认出口为 DIRECT；关键策略证据不完整。".to_owned()
+        },
+    );
+
+    let ai_chain = state
+        .and_then(|value| value.pointer("/summary/ai_chain"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let ai_chain_passed = !ai_chain.is_empty()
+        && ai_chain
+            .iter()
+            .all(|value| !value.eq_ignore_ascii_case("DIRECT"));
+    add(
+        "ai-fail-closed",
+        "AI 出口链失败关闭",
+        if ai_chain_passed { "passed" } else { "failed" },
+        true,
+        if ai_chain_passed {
+            format!("AI 链已提交：{}；未包含 DIRECT。", ai_chain.join(" → "))
+        } else {
+            "AI 链缺失、为空或包含 DIRECT；出口安全门拒绝就绪。".to_owned()
+        },
+    );
+
+    if let Some(fixed) = profile.and_then(|value| value.fixed_egress.as_ref()) {
+        let runtime_fixed = state
+            .and_then(|value| value.pointer("/summary/fixed_egress"))
+            .and_then(serde_json::Value::as_bool);
+        let runtime_host = state
+            .and_then(|value| value.pointer("/summary/fixed_egress_server"))
+            .and_then(serde_json::Value::as_str);
+        let fixed_passed =
+            runtime_fixed == Some(true) && runtime_host == Some(fixed.server.as_str());
+        add(
+            "fixed-exit-binding",
+            "固定出口绑定",
+            if fixed_passed { "passed" } else { "failed" },
+            true,
+            if fixed_passed {
+                "运行态固定出口与系统凭据库中的已保存身份一致。".to_owned()
+            } else {
+                "运行态固定出口与已保存身份不一致；不会接受仅端口可达。".to_owned()
+            },
+        );
+    } else {
+        add(
+            "fixed-exit-binding",
+            "固定出口绑定",
+            "warning",
+            false,
+            "未配置固定 VPS；AI 仅依赖已批准的同地区候选。".to_owned(),
+        );
+    }
+
+    add(
+        "strict-setting",
+        "严格出口偏好",
+        if preferences.strict_ai {
+            "passed"
+        } else {
+            "warning"
+        },
+        false,
+        if preferences.strict_ai {
+            "AI 严格出口已开启。".to_owned()
+        } else {
+            "用户已关闭 AI 严格出口；运行链仍需通过本报告的关键检查。".to_owned()
+        },
+    );
+
+    if windows_platform {
+        let future_processes =
+            proxy_value_matches(observation.user_http_proxy.as_deref(), &expected)
+                && proxy_value_matches(observation.user_https_proxy.as_deref(), &expected);
+        add(
+            "user-proxy-environment",
+            "新进程代理继承",
+            if future_processes {
+                "passed"
+            } else {
+                "warning"
+            },
+            false,
+            if future_processes {
+                format!("用户级 HTTP_PROXY/HTTPS_PROXY 已指向 {expected}。")
+            } else {
+                "用户级代理环境未完全指向稳定入口；新启动的 CLI 可能绕开托管入口。".to_owned()
+            },
+        );
+    }
+    let current_process = proxy_value_matches(process_http_proxy, &expected)
+        && proxy_value_matches(process_https_proxy, &expected);
+    add(
+        "current-process-environment",
+        "当前进程代理继承",
+        if current_process { "passed" } else { "warning" },
+        false,
+        if current_process {
+            "当前应用进程继承的 HTTP_PROXY/HTTPS_PROXY 与稳定入口一致。".to_owned()
+        } else {
+            "当前应用进程仍继承其他代理值；这不改变系统代理，但其子进程可能需要重启应用后再验证。"
+                .to_owned()
+        },
+    );
+    add(
+        "transport-boundary",
+        "DNS / UDP / IPv6 边界",
+        "unknown",
+        false,
+        "当前产品是系统代理与规则管理器，不是虚拟机全流量网关；本检查不把 HTTP 代理成功误报为 DNS、UDP 或 IPv6 已隔离。".to_owned(),
+    );
+
+    let critical_failures = checks
+        .iter()
+        .filter(|check| check.critical && check.state != "passed")
+        .count();
+    let warnings = checks
+        .iter()
+        .filter(|check| !check.critical && check.state != "passed")
+        .count();
+    let ready = critical_failures == 0;
+    EgressSafetyReport {
+        checked_at_ms: unix_time_ms(),
+        ready,
+        critical_failures,
+        warnings,
+        checks,
+        message: if ready {
+            format!("出口安全门已就绪；关键证据完整，另有 {warnings} 项边界或提示。")
+        } else {
+            format!("出口安全门未就绪；{critical_failures} 项关键证据失败或不完整。")
+        },
+    }
+}
+
+#[cfg(feature = "desktop-runtime")]
+fn egress_safety_report(app: &tauri::AppHandle) -> EgressSafetyReport {
+    let preferences = load_preferences(app.clone()).unwrap_or_default();
+    let profile = load_profile().ok();
+    let managed = managed_status(app);
+    let state_value = managed_engine_status_value(app).ok();
+    let state = state_value.as_ref().and_then(|value| value.get("state"));
+    let observation = observe_local_proxy();
+    let process_http_proxy = std::env::var("HTTP_PROXY").ok();
+    let process_https_proxy = std::env::var("HTTPS_PROXY").ok();
+    build_egress_safety_report(
+        &preferences,
+        profile.as_ref(),
+        &managed,
+        state,
+        can_connect("127.0.0.1", STABLE_FRONTEND_PORT),
+        &observation,
+        process_http_proxy.as_deref(),
+        process_https_proxy.as_deref(),
+        cfg!(target_os = "windows"),
+    )
+}
+
+#[cfg(feature = "desktop-runtime")]
+#[tauri::command]
+fn run_egress_safety_audit(app: tauri::AppHandle) -> EgressSafetyReport {
+    egress_safety_report(&app)
+}
+
 fn supervisor_should_recover(preferences: &Preferences, status: &ManagedStatus) -> bool {
+    preferences.mode == "managed" && status.configured && !status.legacy_conflict && !status.running
+}
+
+fn supervisor_should_restart_stuck_manager(
+    preferences: &Preferences,
+    status: &ManagedStatus,
+    consecutive_failures: u32,
+) -> bool {
     preferences.mode == "managed"
         && status.configured
         && !status.legacy_conflict
+        && status.running
         && !status.listener
+        && consecutive_failures >= 3
 }
 
 fn supervisor_backoff_seconds(consecutive_failures: u32) -> u64 {
@@ -3706,7 +4259,7 @@ fn start_supervisor(app: tauri::AppHandle) {
                 next_attempt = Instant::now();
             } else {
                 let current = managed_status(&app);
-                if current.listener {
+                if current.running && current.listener {
                     status.consecutive_failures = 0;
                     status.last_error = None;
                     next_attempt = Instant::now();
@@ -3714,6 +4267,50 @@ fn start_supervisor(app: tauri::AppHandle) {
                     status.last_error = Some("托管模式缺少连接配置，未执行自动恢复".to_owned());
                 } else if current.legacy_conflict {
                     status.last_error = Some("旧版分流仍在运行，等待用户执行无中断迁移".to_owned());
+                } else if current.running && !current.listener {
+                    status.consecutive_failures = status.consecutive_failures.saturating_add(1);
+                    if supervisor_should_restart_stuck_manager(
+                        &preferences,
+                        &current,
+                        status.consecutive_failures,
+                    ) && Instant::now() >= next_attempt
+                    {
+                        status.heartbeat_at_ms = unix_time_ms();
+                        status.last_error = Some(
+                            "管理进程仍在但活动监听连续缺失，正在执行单实例停止后恢复".to_owned(),
+                        );
+                        let _ = write_supervisor_status(&app, &status);
+                        let recovery = stop_managed_engine_process(&app)
+                            .and_then(|_| start_managed_mode_inner(app.clone(), false));
+                        match recovery {
+                            Ok(report) if report.success => {
+                                status.restart_count = status.restart_count.saturating_add(1);
+                                status.last_recovery_at_ms = Some(unix_time_ms());
+                                status.consecutive_failures = 0;
+                                status.last_error = None;
+                                next_attempt = Instant::now();
+                            }
+                            Ok(report) => {
+                                status.last_error = Some(report.message);
+                                next_attempt = Instant::now()
+                                    + Duration::from_secs(supervisor_backoff_seconds(
+                                        status.consecutive_failures,
+                                    ));
+                            }
+                            Err(error) => {
+                                status.last_error = Some(error);
+                                next_attempt = Instant::now()
+                                    + Duration::from_secs(supervisor_backoff_seconds(
+                                        status.consecutive_failures,
+                                    ));
+                            }
+                        }
+                    } else {
+                        status.last_error = Some(format!(
+                            "管理进程仍在，活动监听暂不可达（{}/3）；等待自愈以避免重复启动",
+                            status.consecutive_failures.min(3)
+                        ));
+                    }
                 } else if supervisor_should_recover(&preferences, &current)
                     && Instant::now() >= next_attempt
                 {
@@ -4356,7 +4953,8 @@ fn start_headless_managed_engine(root: &Path) -> Result<u32, String> {
         .stderr(Stdio::from(error_log))
         .spawn()
         .map_err(|error| format!("无法启动无界面托管引擎：{error}"))?;
-    let payload = engine_profile_bytes(&profile)?;
+    let custom_routes = load_custom_routes_from_path(&root.join("custom-routes.json"))?;
+    let payload = engine_profile_bytes(&profile, &custom_routes)?;
     child
         .stdin
         .take()
@@ -4458,7 +5056,7 @@ fn run_headless_supervisor() -> Result<(), String> {
             next_attempt = Instant::now();
         } else {
             let current = headless_managed_status(&root);
-            if current.listener {
+            if current.running && current.listener {
                 if status.consecutive_failures > 0 {
                     status.restart_count = status.restart_count.saturating_add(1);
                     status.last_recovery_at_ms = Some(unix_time_ms());
@@ -4618,7 +5216,7 @@ fn windows_watchdog_vbs(executable: &std::path::Path, marker: &std::path::Path) 
     let executable = vbs_escape(&executable.to_string_lossy());
     let marker = vbs_escape(&marker.to_string_lossy());
     format!(
-        "Option Explicit\r\nDim shell, fso, marker, command, target, service, processes, process, running\r\nSet shell = CreateObject(\"WScript.Shell\")\r\nSet fso = CreateObject(\"Scripting.FileSystemObject\")\r\nSet service = GetObject(\"winmgmts:\\\\.\\root\\cimv2\")\r\nmarker = \"{marker}\"\r\ntarget = LCase(\"{executable}\")\r\ncommand = \"\"\"{executable}\"\" --background\"\r\nDo While fso.FileExists(marker)\r\n  running = False\r\n  Set processes = service.ExecQuery(\"SELECT ExecutablePath, CommandLine FROM Win32_Process\")\r\n  For Each process In processes\r\n    If LCase(CStr(process.ExecutablePath)) = target Then\r\n      If InStr(1, CStr(process.CommandLine), \"--background\", 1) > 0 Then running = True\r\n    End If\r\n  Next\r\n  If Not running Then shell.Run command, 0, False\r\n  WScript.Sleep 15000\r\nLoop\r\n"
+        "Option Explicit\r\nDim shell, fso, marker, command, target, service, processes, process, running\r\nSet shell = CreateObject(\"WScript.Shell\")\r\nSet fso = CreateObject(\"Scripting.FileSystemObject\")\r\nSet service = GetObject(\"winmgmts:\\\\.\\root\\cimv2\")\r\nmarker = \"{marker}\"\r\ntarget = LCase(\"{executable}\")\r\ncommand = \"\"\"{executable}\"\" --background\"\r\nDo While fso.FileExists(marker)\r\n  running = False\r\n  Set processes = service.ExecQuery(\"SELECT ExecutablePath, CommandLine FROM Win32_Process\")\r\n  For Each process In processes\r\n    If Not IsNull(process.ExecutablePath) And Not IsNull(process.CommandLine) Then\r\n      If LCase(CStr(process.ExecutablePath)) = target Then\r\n        If InStr(1, CStr(process.CommandLine), \"--background\", 1) > 0 Then running = True\r\n      End If\r\n    End If\r\n  Next\r\n  If Not running Then shell.Run command, 0, False\r\n  WScript.Sleep 15000\r\nLoop\r\n"
     )
 }
 
@@ -5079,7 +5677,8 @@ fn execute_engine_preview(
         .spawn()
         .map_err(|error| format!("无法启动分流预演：{error}"))?;
 
-    let payload = engine_profile_bytes(profile)?;
+    let custom_routes = load_custom_routes_inner(app)?;
+    let payload = engine_profile_bytes(profile, &custom_routes)?;
     let write_result = child
         .stdin
         .take()
@@ -5161,9 +5760,28 @@ fn start_managed_mode_inner(
 ) -> Result<ManagedActionReport, String> {
     let before = managed_status(&app);
     if before.running && before.listener {
+        let audit = egress_safety_report(&app);
+        if !audit.ready {
+            let _ = stop_managed_engine_process(&app);
+            return Ok(ManagedActionReport {
+                success: false,
+                message: format!("检测到已运行核心但{}；已恢复原系统代理", audit.message),
+                status: managed_status(&app),
+                preview: None,
+            });
+        }
         return Ok(ManagedActionReport {
             success: true,
-            message: "托管分流已经在运行".to_owned(),
+            message: "托管分流已经在运行，出口安全门关键证据完整".to_owned(),
+            status: before,
+            preview: None,
+        });
+    }
+    if before.running {
+        return Ok(ManagedActionReport {
+            success: false,
+            message: "管理进程仍在但活动监听暂不可达；已拒绝重复启动，等待监督器按单实例流程恢复"
+                .to_owned(),
             status: before,
             preview: None,
         });
@@ -5222,7 +5840,8 @@ fn start_managed_mode_inner(
     let mut child = command
         .spawn()
         .map_err(|error| format!("无法启动托管引擎：{error}"))?;
-    let payload = engine_profile_bytes(&profile)?;
+    let custom_routes = load_custom_routes_inner(&app)?;
+    let payload = engine_profile_bytes(&profile, &custom_routes)?;
     let write_result = child
         .stdin
         .take()
@@ -5258,12 +5877,24 @@ fn start_managed_mode_inner(
         }
         let status = managed_status(&app);
         if status.running && status.listener {
-            return Ok(ManagedActionReport {
-                success: true,
-                message: "隔离预演通过，托管分流已接管并持续自愈".to_owned(),
-                status,
-                preview: Some(preview),
-            });
+            let mut last_audit = egress_safety_report(&app);
+            for _ in 0..10 {
+                if last_audit.ready {
+                    return Ok(ManagedActionReport {
+                        success: true,
+                        message: "隔离预演与出口安全门均通过，托管分流已接管并持续自愈".to_owned(),
+                        status: managed_status(&app),
+                        preview: Some(preview),
+                    });
+                }
+                thread::sleep(Duration::from_millis(500));
+                last_audit = egress_safety_report(&app);
+            }
+            let detail = last_audit.message.clone();
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stop_managed_engine_process(&app);
+            return Err(format!("托管核心已启动，但{detail}；已恢复原系统代理"));
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -5665,6 +6296,125 @@ fn save_gateway_policies(
     Ok(policies)
 }
 
+fn load_custom_routes_from_path(path: &Path) -> Result<Vec<CustomRouteRule>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let payload = fs::read(path).map_err(|error| format!("无法读取自定义分流：{error}"))?;
+    let envelope: CustomRoutesEnvelope =
+        serde_json::from_slice(&payload).map_err(|error| format!("自定义分流格式错误：{error}"))?;
+    if envelope.version != CONFIG_VERSION {
+        return Err(format!("不支持的自定义分流版本：{}", envelope.version));
+    }
+    validate_custom_routes(&envelope.rules)
+}
+
+#[cfg(feature = "desktop-runtime")]
+fn load_custom_routes_inner(app: &tauri::AppHandle) -> Result<Vec<CustomRouteRule>, String> {
+    load_custom_routes_from_path(&custom_routes_path(app)?)
+}
+
+#[cfg(feature = "desktop-runtime")]
+fn write_custom_routes_inner(
+    app: &tauri::AppHandle,
+    routes: &[CustomRouteRule],
+) -> Result<Vec<CustomRouteRule>, String> {
+    let routes = validate_custom_routes(routes)?;
+    let path = custom_routes_path(app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "自定义分流路径无父目录".to_owned())?;
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建自定义分流目录：{error}"))?;
+    let payload = serde_json::to_vec_pretty(&CustomRoutesEnvelope {
+        version: CONFIG_VERSION,
+        rules: routes.clone(),
+    })
+    .map_err(|error| format!("无法序列化自定义分流：{error}"))?;
+    let temporary = path.with_extension("json.tmp");
+    let backup = path.with_extension("json.bak");
+    fs::write(&temporary, payload)
+        .map_err(|error| format!("无法写入自定义分流临时文件：{error}"))?;
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|error| format!("无法清理自定义分流旧备份：{error}"))?;
+    }
+    if path.exists() {
+        fs::rename(&path, &backup).map_err(|error| format!("无法备份现有自定义分流：{error}"))?;
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("无法提交自定义分流：{error}"));
+    }
+    if backup.exists() {
+        fs::remove_file(&backup)
+            .map_err(|error| format!("规则已提交，但旧备份清理失败：{error}"))?;
+    }
+    Ok(routes)
+}
+
+#[cfg(feature = "desktop-runtime")]
+#[tauri::command]
+fn load_custom_routes(app: tauri::AppHandle) -> Result<Vec<CustomRouteRule>, String> {
+    load_custom_routes_inner(&app)
+}
+
+#[cfg(feature = "desktop-runtime")]
+#[tauri::command]
+fn save_custom_routes(
+    app: tauri::AppHandle,
+    routes: Vec<CustomRouteRule>,
+) -> Result<CustomRouteUpdateReport, String> {
+    let path = custom_routes_path(&app)?;
+    let previous = fs::read(&path).ok();
+    let routes = write_custom_routes_inner(&app, &routes)?;
+    let before = managed_status(&app);
+    if !before.running || !before.listener {
+        return Ok(CustomRouteUpdateReport {
+            rules: routes,
+            applied: false,
+            message: "规则已保存；下次启动托管分流时自动应用".to_owned(),
+        });
+    }
+
+    set_supervisor_suspended(&app, true)?;
+    let apply_result = (|| -> Result<ManagedActionReport, String> {
+        stop_managed_engine_process(&app)?;
+        start_managed_mode_inner(app.clone(), false)
+    })();
+    match apply_result {
+        Ok(report) if report.success => {
+            set_supervisor_suspended(&app, false)?;
+            Ok(CustomRouteUpdateReport {
+                rules: routes,
+                applied: true,
+                message: "规则已保存并通过隔离预演，当前托管分流已更新".to_owned(),
+            })
+        }
+        result => {
+            let apply_error = match result {
+                Ok(report) => report.message,
+                Err(error) => error,
+            };
+            let restore_error = restore_optional_file(&path, previous.as_deref()).err();
+            let restart_error = start_managed_mode_inner(app.clone(), false).err();
+            let resume_error = set_supervisor_suspended(&app, false).err();
+            let mut details = vec![format!("应用失败：{apply_error}")];
+            if let Some(error) = restore_error {
+                details.push(format!("规则回滚失败：{error}"));
+            }
+            if let Some(error) = restart_error {
+                details.push(format!("原线路恢复失败：{error}"));
+            }
+            if let Some(error) = resume_error {
+                details.push(format!("监督器恢复失败：{error}"));
+            }
+            Err(details.join("；"))
+        }
+    }
+}
+
 #[cfg(feature = "desktop-runtime")]
 #[tauri::command]
 fn save_preferences(app: tauri::AppHandle, preferences: Preferences) -> Result<(), String> {
@@ -5769,6 +6519,7 @@ fn create_local_backup(app: tauri::AppHandle) -> Result<LocalBackupReport, Strin
     let preferences = load_preferences(app.clone())?;
     let offers = load_referral_offers(app.clone())?.unwrap_or_default();
     let gateway_policies = load_gateway_policies_inner(&app)?;
+    let custom_routes = load_custom_routes_inner(&app)?;
     let backup = LocalBackupEnvelope {
         version: CONFIG_VERSION,
         created_at_ms: SystemTime::now()
@@ -5779,6 +6530,7 @@ fn create_local_backup(app: tauri::AppHandle) -> Result<LocalBackupReport, Strin
         preferences,
         offers,
         gateway_policies,
+        custom_routes,
     };
     let secret =
         serde_json::to_string(&backup).map_err(|error| format!("无法序列化本机备份：{error}"))?;
@@ -5802,15 +6554,18 @@ fn restore_local_backup(app: tauri::AppHandle) -> Result<LocalBackupReport, Stri
     let preferences_path = preferences_path(&app)?;
     let referrals_path = referral_offers_path(&app)?;
     let gateway_policies_path = gateway_policies_path(&app)?;
+    let custom_routes_path = custom_routes_path(&app)?;
     let previous_preferences_bytes = fs::read(&preferences_path).ok();
     let previous_referrals_bytes = fs::read(&referrals_path).ok();
     let previous_gateway_policies_bytes = fs::read(&gateway_policies_path).ok();
+    let previous_custom_routes_bytes = fs::read(&custom_routes_path).ok();
     let previous_preferences = load_preferences(app.clone()).unwrap_or_default();
 
     let apply = (|| -> Result<(), String> {
         store_profile(&backup.profile)?;
         save_referral_offers(app.clone(), backup.offers.clone())?;
         save_gateway_policies(app.clone(), backup.gateway_policies.clone())?;
+        write_custom_routes_inner(&app, &backup.custom_routes)?;
         save_preferences(app.clone(), backup.preferences.clone())?;
         Ok(())
     })();
@@ -5838,6 +6593,11 @@ fn restore_local_backup(app: tauri::AppHandle) -> Result<LocalBackupReport, Stri
             previous_gateway_policies_bytes.as_deref(),
         ) {
             rollback_errors.push(format!("家庭网关策略：{rollback}"));
+        }
+        if let Err(rollback) =
+            restore_optional_file(&custom_routes_path, previous_custom_routes_bytes.as_deref())
+        {
+            rollback_errors.push(format!("自定义分流：{rollback}"));
         }
         if let Err(rollback) = configure_auto_start(previous_preferences.auto_start) {
             rollback_errors.push(format!("自动启动：{rollback}"));
@@ -6552,6 +7312,8 @@ pub fn run() {
             configure_home_gateway,
             load_gateway_policies,
             save_gateway_policies,
+            load_custom_routes,
+            save_custom_routes,
             export_diagnostics,
             get_local_backup_status,
             create_local_backup,
@@ -6568,6 +7330,7 @@ pub fn run() {
             import_existing_profile,
             run_engine_preview,
             get_managed_status,
+            run_egress_safety_audit,
             get_supervisor_status,
             repair_supervisor,
             check_for_updates,
@@ -6842,11 +7605,135 @@ mod tests {
 
     #[test]
     fn engine_profile_uses_stdin_schema_without_camel_case_secret_field() {
-        let bytes = engine_profile_bytes(&sample_profile()).unwrap();
+        let bytes = engine_profile_bytes(
+            &sample_profile(),
+            &[CustomRouteRule {
+                label: String::new(),
+                domain: "example.com".to_owned(),
+                channel: "download".to_owned(),
+            }],
+        )
+        .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(json.get("subscriptions").unwrap().is_array());
         assert!(json.get("fixed_egress").unwrap().is_object());
         assert!(json.get("fixedEgress").is_none());
+        assert_eq!(json["custom_routes"][0]["domain"], "example.com");
+    }
+
+    #[test]
+    fn custom_routes_normalize_urls_and_reject_duplicates_or_unknown_channels() {
+        let normalized = validate_custom_routes(&[CustomRouteRule {
+            label: "社区站点".to_owned(),
+            domain: "https://Laowang.vip/path?q=1".to_owned(),
+            channel: "DOWNLOAD".to_owned(),
+        }])
+        .unwrap();
+        assert_eq!(
+            normalized,
+            vec![CustomRouteRule {
+                label: "社区站点".to_owned(),
+                domain: "laowang.vip".to_owned(),
+                channel: "download".to_owned(),
+            }]
+        );
+        assert!(
+            validate_custom_routes(&[
+                CustomRouteRule {
+                    label: String::new(),
+                    domain: "example.com".to_owned(),
+                    channel: "direct".to_owned(),
+                },
+                CustomRouteRule {
+                    label: String::new(),
+                    domain: "EXAMPLE.com".to_owned(),
+                    channel: "ai".to_owned(),
+                },
+            ])
+            .is_err()
+        );
+        assert!(
+            validate_custom_routes(&[CustomRouteRule {
+                label: String::new(),
+                domain: "example.com".to_owned(),
+                channel: "arbitrary-shell".to_owned(),
+            }])
+            .is_err()
+        );
+        assert!(
+            validate_custom_routes(&[
+                CustomRouteRule {
+                    label: "Google 服务".to_owned(),
+                    domain: "google.com".to_owned(),
+                    channel: "direct".to_owned(),
+                },
+                CustomRouteRule {
+                    label: "Google 服务".to_owned(),
+                    domain: "googleapis.com".to_owned(),
+                    channel: "download".to_owned(),
+                },
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn fixed_custom_route_channel_is_preserved_for_the_fixed_ai_exit() {
+        let normalized = validate_custom_routes(&[CustomRouteRule {
+            label: "固定出口诊断".to_owned(),
+            domain: "https://IPPure.com/check".to_owned(),
+            channel: "FIXED".to_owned(),
+        }])
+        .unwrap();
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].domain, "ippure.com");
+        assert_eq!(normalized[0].channel, "fixed");
+    }
+
+    #[test]
+    fn custom_routes_file_roundtrips_public_domain_and_channel_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("custom-routes.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&CustomRoutesEnvelope {
+                version: CONFIG_VERSION,
+                rules: vec![CustomRouteRule {
+                    label: "示例服务".to_owned(),
+                    domain: "https://Example.com/path".to_owned(),
+                    channel: "download".to_owned(),
+                }],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_custom_routes_from_path(&path).unwrap(),
+            vec![CustomRouteRule {
+                label: "示例服务".to_owned(),
+                domain: "example.com".to_owned(),
+                channel: "download".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn custom_routes_file_loads_legacy_rules_without_group_labels() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("custom-routes.json");
+        fs::write(
+            &path,
+            br#"{"version":1,"rules":[{"domain":"example.com","channel":"download"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_custom_routes_from_path(&path).unwrap(),
+            vec![CustomRouteRule {
+                label: String::new(),
+                domain: "example.com".to_owned(),
+                channel: "download".to_owned(),
+            }]
+        );
     }
 
     #[test]
@@ -7217,6 +8104,7 @@ mod tests {
             preferences: Preferences::default(),
             offers: vec![sample_referral_offer()],
             gateway_policies: Vec::new(),
+            custom_routes: Vec::new(),
         };
         let json = serde_json::to_string(&backup_status_from(Some(&backup))).unwrap();
         assert!(json.contains("subscriptionCount"));
@@ -7597,7 +8485,22 @@ mod tests {
         preferences.mode = "managed".to_owned();
         assert!(supervisor_should_recover(&preferences, &status));
         status.listener = true;
+        assert!(supervisor_should_recover(&preferences, &status));
+        status.running = true;
         assert!(!supervisor_should_recover(&preferences, &status));
+        status.listener = false;
+        assert!(!supervisor_should_recover(&preferences, &status));
+        assert!(!supervisor_should_restart_stuck_manager(
+            &preferences,
+            &status,
+            2
+        ));
+        assert!(supervisor_should_restart_stuck_manager(
+            &preferences,
+            &status,
+            3
+        ));
+        status.running = false;
         status.listener = false;
         status.legacy_conflict = true;
         assert!(!supervisor_should_recover(&preferences, &status));
@@ -7705,6 +8608,9 @@ mod tests {
         assert!(watchdog.contains("If Not running Then shell.Run command, 0, False"));
         assert!(watchdog.contains("WScript.Sleep 15000"));
         assert!(watchdog.contains("LCase(CStr(process.ExecutablePath)) = target"));
+        assert!(watchdog.contains(
+            "If Not IsNull(process.ExecutablePath) And Not IsNull(process.CommandLine) Then"
+        ));
         assert!(watchdog.contains("--background"));
         assert!(watchdog.contains("supervisor.enabled"));
         assert_eq!(
@@ -7968,5 +8874,104 @@ mod tests {
         assert!(!background_start_requested_from(["app", "background"]));
         assert!(managed_repair_requested_from(["app", "--repair-managed"]));
         assert!(!managed_repair_requested_from(["app", "repair-managed"]));
+    }
+
+    #[test]
+    fn egress_safety_gate_requires_committed_route_identity_not_only_a_listener() {
+        let managed = ManagedStatus {
+            configured: true,
+            running: true,
+            listener: true,
+            active_proxy_port: Some(27899),
+            system_proxy: Some("127.0.0.1:17901".to_owned()),
+            legacy_conflict: false,
+            message: "running".to_owned(),
+        };
+        let state = serde_json::json!({
+            "active_slot": "B",
+            "active_proxy_port": 27899,
+            "summary": {
+                "default_route": "下载线路",
+                "ai_chain": ["AI-固定出口", "DIRECT"],
+                "fixed_egress": true,
+                "fixed_egress_server": "198.51.100.9"
+            }
+        });
+        let observation = LocalProxyObservation {
+            wininet_enabled: Some(true),
+            wininet_server: Some("127.0.0.1:17901".to_owned()),
+            user_http_proxy: Some("http://127.0.0.1:17901".to_owned()),
+            user_https_proxy: Some("http://127.0.0.1:17901".to_owned()),
+            winhttp_enabled: Some(true),
+            winhttp_server: Some("127.0.0.1:17901".to_owned()),
+        };
+        let report = build_egress_safety_report(
+            &Preferences::default(),
+            Some(&sample_profile()),
+            &managed,
+            Some(&state),
+            true,
+            &observation,
+            Some("http://127.0.0.1:17901"),
+            Some("http://127.0.0.1:17901"),
+            true,
+        );
+        assert!(!report.ready);
+        assert_eq!(report.critical_failures, 3);
+        for id in ["default-route", "ai-fail-closed", "fixed-exit-binding"] {
+            assert!(
+                report
+                    .checks
+                    .iter()
+                    .any(|check| check.id == id && check.state == "failed")
+            );
+        }
+    }
+
+    #[test]
+    fn egress_safety_gate_passes_complete_evidence_and_keeps_transport_boundary_unknown() {
+        let managed = ManagedStatus {
+            configured: true,
+            running: true,
+            listener: true,
+            active_proxy_port: Some(27899),
+            system_proxy: Some("127.0.0.1:17901".to_owned()),
+            legacy_conflict: false,
+            message: "running".to_owned(),
+        };
+        let state = serde_json::json!({
+            "active_slot": "B",
+            "active_proxy_port": 27899,
+            "summary": {
+                "default_route": "DIRECT",
+                "ai_chain": ["AI-固定出口"],
+                "fixed_egress": true,
+                "fixed_egress_server": "203.0.113.8"
+            }
+        });
+        let observation = LocalProxyObservation {
+            wininet_enabled: Some(true),
+            wininet_server: Some("127.0.0.1:17901".to_owned()),
+            user_http_proxy: Some("http://127.0.0.1:17901".to_owned()),
+            user_https_proxy: Some("http://127.0.0.1:17901".to_owned()),
+            winhttp_enabled: Some(true),
+            winhttp_server: Some("127.0.0.1:17901".to_owned()),
+        };
+        let report = build_egress_safety_report(
+            &Preferences::default(),
+            Some(&sample_profile()),
+            &managed,
+            Some(&state),
+            true,
+            &observation,
+            Some("http://127.0.0.1:17901"),
+            Some("http://127.0.0.1:17901"),
+            true,
+        );
+        assert!(report.ready);
+        assert_eq!(report.critical_failures, 0);
+        assert!(report.checks.iter().any(|check| {
+            check.id == "transport-boundary" && check.state == "unknown" && !check.critical
+        }));
     }
 }

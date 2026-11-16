@@ -47,3 +47,12 @@ The application also links dependencies listed in `pnpm-lock.yaml` and
 `src-tauri/Cargo.lock`. Their individual license terms remain applicable.
 Release builds should retain the lockfiles and generate a dependency license
 report as part of the release audit.
+
+## Claude Cage
+
+- Project: https://github.com/Lee-xeo/Claude-Cage
+- Reviewed revision: `89a36b866400cb53113b8e2ce09a6ca6e5af0552` (2026-11-15)
+- License: MIT
+- Use in this project: design reference for evidence-based network checks,
+  durable fail-closed intent, explicit active-exit binding, and honest unknown
+  states. No Claude Cage source file or bundled binary is vendored.

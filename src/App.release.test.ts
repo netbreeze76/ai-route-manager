@@ -22,6 +22,28 @@ describe("正式版交互门禁", () => {
     expect(appSource).toContain("await repairSupervisor()");
   });
 
+  it("出口安全门展示逐项证据并保留 DNS UDP IPv6 未知边界", () => {
+    expect(appSource).toContain("出口安全门");
+    expect(appSource).toContain("runEgressSafetyAudit()");
+    expect(appSource).toContain("监听端口存在不等于出口已经正确提交");
+    expect(appSource).toContain("DNS、UDP、IPv6");
+    expect(appSource).toContain("check.critical ? \"关键\"");
+  });
+
+  it("策略中心把单域名和服务组规则集成到场景列表并立即应用", () => {
+    expect(appSource).toContain("新增域名 / 服务");
+    expect(appSource).toContain("单个域名");
+    expect(appSource).toContain("一组服务");
+    expect(appSource).toContain("groupCustomRoutes");
+    expect(appSource).toContain("loadCustomRoutes()");
+    expect(appSource).toContain("saveCustomRoutes(routes)");
+    expect(appSource).toContain("custom-service-row");
+    expect(appSource).toContain("服务域名列表（每行一个，也支持逗号）");
+    expect(appSource).toContain('download: "Telegram / 下载线路"');
+    expect(appSource).toContain('direct: "直接连接"');
+    expect(appSource).not.toContain('<section className="panel custom-routes-panel">');
+  });
+
   it("推荐中心把八戒和魔戒归入大流量，把 VPS 归入稳定出口", () => {
     expect(offers.map((offer) => [offer.provider, offer.placement])).toEqual([
       ["八戒 VPN", "download-vpn"],

@@ -71,7 +71,7 @@ export const defaultSources: ProxySource[] = [
 export const defaultServices: ServicePolicy[] = [
   { id: "openai", name: "ChatGPT / OpenAI", category: "ai", icon: "AI", policy: "严格目标地区", exit: "固定出口", health: "healthy", strict: true },
   { id: "anthropic", name: "Claude / Anthropic", category: "ai", icon: "CL", policy: "严格目标地区", exit: "固定出口", health: "healthy", strict: true },
-  { id: "google-ai", name: "Gemini / Google AI", category: "ai", icon: "GM", policy: "目标地区优先", exit: "同地区兜底", health: "healthy", strict: false },
+  { id: "google-ai", name: "Gemini / Google AI", category: "ai", icon: "GM", policy: "严格固定出口", exit: "固定出口", health: "healthy", strict: true },
   { id: "steam", name: "Steam 商店与登录", category: "game", icon: "ST", policy: "账户地区保护", exit: "稳定订阅", health: "healthy", strict: true },
   { id: "steam-cdn", name: "Steam 游戏下载", category: "download", icon: "DL", policy: "便宜高速", exit: "下载源 2", health: "healthy", strict: false },
   { id: "netflix", name: "Netflix", category: "stream", icon: "NF", policy: "会话出口锁定", exit: "流媒体线路", health: "idle", strict: false },

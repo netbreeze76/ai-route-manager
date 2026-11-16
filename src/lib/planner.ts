@@ -29,7 +29,8 @@ export function buildRoutePlan(
 ): RoutePlanItem[] {
   return services.map((service) => {
     const isAi = service.category === "ai";
-    const failClosed = service.strict || (isAi && preferences.strictAi);
+    const isGemini = service.id === "google-ai";
+    const failClosed = isGemini || service.strict || (isAi && preferences.strictAi);
     const fallback = failClosed
       ? preferences.allowSameRegionFallback
         ? "仅同地区批准出口"
@@ -40,7 +41,7 @@ export function buildRoutePlan(
 
     return {
       service: service.name,
-      target: service.exit,
+      target: isGemini ? "固定出口" : service.exit,
       fallback,
       failClosed,
     };

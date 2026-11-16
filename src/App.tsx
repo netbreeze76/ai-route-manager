@@ -3,7 +3,7 @@ import {
   Activity, ArchiveRestore, ArrowRight, Bot, Boxes, Cable, Check, ChevronRight, Coffee,
   CircleDollarSign, Cloud, Cpu, Database, Download, ExternalLink, Gamepad2, Gauge,
   FileKey2, Globe2, HeartPulse, Home, Laptop, LockKeyhole, MonitorSmartphone,
-  Network, PackageOpen, Play, Plus, Radio, Router, Save, Server,
+  Network, PackageOpen, Pencil, Play, Plus, Radio, Router, Save, Server,
   Settings, ShieldCheck, ShoppingBag, Signal, Smartphone, Sparkles, TerminalSquare,
   Tv, WandSparkles, Wifi, X,
 } from "lucide-react";
@@ -19,8 +19,8 @@ import { normalizeUpdateEndpoint, updateEndpointError, updateProgressLabel } fro
 import { settleTask } from "./lib/startup";
 import {
   checkForUpdates, configureHomeGateway, configureLocalStreamingFirewall, configureRustDeskFirewall, configureSunshineStreaming, createLocalBackup, deployRustDeskServer, exportDiagnostics, exportMobileBundle, exportRemoteProfile, getConnectionProfileSummary, getEngineStatus, getLocalBackupStatus, getManagedStatus, getRemoteEnvironment, getSunshineConfigStatus, getSupervisorStatus, getSystemSnapshot, importExistingProfile, inspectHomeGateway, installPendingUpdate, installRemoteTool,
-  loadGatewayPolicies, loadPreferences, loadPublisherReferralCatalog, loadReferralOffers, migrateLegacyMode, openExternalUrl, probeRemotePath, repairSupervisor, restoreLocalBackup, runEnginePreview, saveConnectionProfile, saveGatewayPolicies, savePreferences, saveReferralOffers, startManagedMode, stopManagedMode,
-  type ConnectionProfile, type DiagnosticExportReport, type EngineReport, type FirewallActionReport, type GatewayDeployReport, type GatewayDevicePolicy, type GatewayInspectReport, type GatewayScenario, type LocalBackupStatus, type ManagedStatus, type MobileExportReport, type PreviewReport, type ProfileSummary, type PublisherReferralCatalogReport, type RemoteEnvironmentReport, type RemoteQualityReport, type RustDeskDeployReport, type SunshineConfigActionReport, type SunshineConfigStatus, type SupervisorStatus, type SystemSnapshot, type UpdateCheckReport,
+  loadCustomRoutes, loadGatewayPolicies, loadPreferences, loadPublisherReferralCatalog, loadReferralOffers, migrateLegacyMode, openExternalUrl, probeRemotePath, repairSupervisor, restoreLocalBackup, runEgressSafetyAudit, runEnginePreview, saveConnectionProfile, saveCustomRoutes, saveGatewayPolicies, savePreferences, saveReferralOffers, startManagedMode, stopManagedMode,
+  type ConnectionProfile, type CustomRouteChannel, type CustomRouteRule, type DiagnosticExportReport, type EgressSafetyReport, type EngineReport, type FirewallActionReport, type GatewayDeployReport, type GatewayDevicePolicy, type GatewayInspectReport, type GatewayScenario, type LocalBackupStatus, type ManagedStatus, type MobileExportReport, type PreviewReport, type ProfileSummary, type PublisherReferralCatalogReport, type RemoteEnvironmentReport, type RemoteQualityReport, type RustDeskDeployReport, type SunshineConfigActionReport, type SunshineConfigStatus, type SupervisorStatus, type SystemSnapshot, type UpdateCheckReport,
 } from "./lib/backend";
 import type { AppPreferences, NavId, ReferralOffer, ServicePolicy } from "./types";
 
@@ -149,11 +149,89 @@ function SourcesPage({ offers, onReferralOpen, onConfigureReferrals }: { offers:
   </>;
 }
 
+type CustomRouteGroup = { key: string; label: string; domains: string[]; channel: CustomRouteChannel; indexes: number[] };
+type CustomRouteEditor = { key: string | null; mode: "domain" | "service"; label: string; domains: string; channel: CustomRouteChannel };
+
+const customRouteChannelLabels: Record<CustomRouteChannel, string> = {
+  download: "Telegram / 下载线路",
+  ai: "AI 智能线路（固定出口优先）",
+  fixed: "AI 固定出口",
+  gemini: "Gemini 专用线路",
+  direct: "直接连接",
+};
+
+function groupCustomRoutes(routes: CustomRouteRule[]): CustomRouteGroup[] {
+  const groups = new Map<string, CustomRouteGroup>();
+  routes.forEach((route, index) => {
+    const label = route.label.trim();
+    const key = label ? `service:${label}` : `domain:${route.domain}`;
+    const current = groups.get(key) ?? { key, label, domains: [], channel: route.channel, indexes: [] };
+    current.domains.push(route.domain); current.indexes.push(index); groups.set(key, current);
+  });
+  return [...groups.values()];
+}
+
 function ServicesPage({ services, setServices }: { services: ServicePolicy[]; setServices: (value: ServicePolicy[]) => void }) {
-  const categories = [{ id: "ai", label: "境外 AI", icon: Sparkles }, { id: "game", label: "游戏与商店", icon: Gamepad2 }, { id: "stream", label: "流媒体", icon: Tv }, { id: "work", label: "通讯与办公", icon: TerminalSquare }];
+  const categories = [{ id: "ai", label: "境外 AI", icon: Sparkles }, { id: "game", label: "游戏与商店", icon: Gamepad2 }, { id: "stream", label: "流媒体", icon: Tv }, { id: "work", label: "通讯与办公", icon: TerminalSquare }, { id: "custom", label: "自定义", icon: Globe2 }];
   const [category, setCategory] = useState<string>("all");
-  const visibleServices = category === "all" ? services : services.filter((service) => service.category === category);
-  return <><PageHeader eyebrow="策略中心" title="按场景自动分流" description="选择分类后直接编辑每项策略；修改会保存在本机。" /><section className="category-row"><button className={category === "all" ? "category-chip active" : "category-chip"} onClick={() => setCategory("all")}>全部</button>{categories.map(({ id, label, icon: Icon }) => <button className={category === id ? "category-chip active" : "category-chip"} key={id} onClick={() => setCategory(id)}><Icon size={17} />{label}</button>)}</section><section className="service-list panel"><div className="table-header"><span>服务</span><span>策略</span><span>实际出口</span><span>严格模式</span><span /></div>{visibleServices.map((service) => <div className="service-row" key={service.id}><div className="service-name"><span className={`service-logo category-${service.category}`}>{service.icon}</span><div><strong>{service.name}</strong><small>{service.category.toUpperCase()}</small></div></div><select value={service.policy} onChange={(e) => setServices(services.map((s) => s.id === service.id ? { ...s, policy: e.target.value } : s))}><option>{service.policy}</option><option>严格目标地区</option><option>稳定线路</option><option>便宜线路</option><option>直连保护</option></select><div className="exit-cell"><StatusDot status={service.health} />{service.exit}</div><button className={service.strict ? "toggle on" : "toggle"} onClick={() => setServices(services.map((s) => s.id === service.id ? { ...s, strict: !s.strict } : s))} aria-label={`${service.name}严格模式`}><span /></button><span /></div>)}</section></>;
+  const [customRoutes, setCustomRoutes] = useState<CustomRouteRule[]>([]);
+  const [editor, setEditor] = useState<CustomRouteEditor | null>(null);
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [routeMessage, setRouteMessage] = useState("");
+  const [routeApplied, setRouteApplied] = useState(false);
+  const customGroups = useMemo(() => groupCustomRoutes(customRoutes), [customRoutes]);
+  const visibleServices = category === "all" ? services : category === "custom" ? [] : services.filter((service) => service.category === category);
+  const showCustom = category === "all" || category === "custom";
+
+  useEffect(() => {
+    void loadCustomRoutes()
+      .then(setCustomRoutes)
+      .catch((error) => setRouteMessage(error instanceof Error ? error.message : String(error)));
+  }, []);
+
+  const persistRoutes = async (routes: CustomRouteRule[], closeEditor = false) => {
+    setRouteBusy(true); setRouteMessage(""); setRouteApplied(false);
+    try {
+      const report = await saveCustomRoutes(routes);
+      setCustomRoutes(report.rules); setRouteApplied(report.applied); setRouteMessage(report.message);
+      if (closeEditor) setEditor(null);
+    } catch (error) {
+      setRouteMessage(error instanceof Error ? error.message : String(error));
+    } finally { setRouteBusy(false); }
+  };
+  const openNewRoute = () => setEditor({ key: null, mode: "domain", label: "", domains: "", channel: "download" });
+  const editGroup = (group: CustomRouteGroup) => setEditor({ key: group.key, mode: group.label ? "service" : "domain", label: group.label, domains: group.domains.join("\n"), channel: group.channel });
+  const saveEditor = () => {
+    if (!editor) return;
+    const domains = editor.domains.split(/[\n,，;；]+/).map((item) => item.trim()).filter(Boolean);
+    const selected = editor.mode === "domain" ? domains.slice(0, 1) : domains;
+    const removed = editor.key ? customGroups.find((group) => group.key === editor.key)?.indexes ?? [] : [];
+    const base = customRoutes.filter((_, index) => !removed.includes(index));
+    const label = editor.mode === "service" ? editor.label.trim() : "";
+    void persistRoutes([...base, ...selected.map((domain) => ({ label, domain, channel: editor.channel }))], true);
+  };
+  const changeGroupChannel = (group: CustomRouteGroup, channel: CustomRouteChannel) => {
+    const indexes = new Set(group.indexes);
+    void persistRoutes(customRoutes.map((route, index) => indexes.has(index) ? { ...route, channel } : route));
+  };
+  const removeGroup = (group: CustomRouteGroup) => {
+    const indexes = new Set(group.indexes);
+    void persistRoutes(customRoutes.filter((_, index) => !indexes.has(index)));
+  };
+  const editorDomains = editor?.domains.split(/[\n,，;；]+/).map((item) => item.trim()).filter(Boolean) ?? [];
+  const editorInvalid = !editor || editorDomains.length === 0 || (editor.mode === "service" && !editor.label.trim());
+
+  return <>
+    <PageHeader eyebrow="策略中心" title="按场景自动分流" description="选择分类后直接编辑策略；新增域名和服务组会保存在本机并经过隔离预演。" action={<button className="button button-primary" onClick={openNewRoute} disabled={routeBusy || customRoutes.length >= 100}><Plus size={15} />新增域名 / 服务</button>} />
+    <section className="category-row"><button className={category === "all" ? "category-chip active" : "category-chip"} onClick={() => setCategory("all")}>全部</button>{categories.map(({ id, label, icon: Icon }) => <button className={category === id ? "category-chip active" : "category-chip"} key={id} onClick={() => setCategory(id)}><Icon size={17} />{label}</button>)}</section>
+    {routeMessage && <div className={`result-banner route-result ${routeApplied ? "success" : ""}`}><StatusDot status={routeApplied ? "healthy" : "warning"} /><span>{routeMessage}</span></div>}
+    <section className="service-list panel"><div className="table-header"><span>服务</span><span>匹配策略</span><span>实际出口</span><span>类型</span><span /></div>
+      {visibleServices.map((service) => <div className="service-row" key={service.id}><div className="service-name"><span className={`service-logo category-${service.category}`}>{service.icon}</span><div><strong>{service.name}</strong><small>{service.category.toUpperCase()}</small></div></div><select value={service.policy} onChange={(e) => setServices(services.map((s) => s.id === service.id ? { ...s, policy: e.target.value } : s))}><option>{service.policy}</option><option>严格目标地区</option><option>稳定线路</option><option>便宜线路</option><option>直连保护</option></select><div className="exit-cell"><StatusDot status={service.health} />{service.exit}</div><button className={service.strict ? "toggle on" : "toggle"} onClick={() => setServices(services.map((s) => s.id === service.id ? { ...s, strict: !s.strict } : s))} aria-label={`${service.name}严格模式`}><span /></button><span /></div>)}
+      {showCustom && customGroups.map((group) => <div className="service-row custom-service-row" key={group.key}><div className="service-name"><span className="service-logo category-custom">{group.label ? "组" : "域"}</span><div><strong>{group.label || group.domains[0]}</strong><small title={group.domains.join(" · ")}>{group.label ? `${group.domains.length} 个域名 · ${group.domains.join(" · ")}` : "CUSTOM DOMAIN"}</small></div></div><select value={group.channel} disabled={routeBusy} onChange={(event) => changeGroupChannel(group, event.target.value as CustomRouteChannel)}>{Object.entries(customRouteChannelLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><div className="exit-cell"><StatusDot status="healthy" />{customRouteChannelLabels[group.channel]}</div><span className="policy-chip">{group.label ? "服务组" : "单域名"}</span><div className="custom-row-actions"><button className="icon-button" onClick={() => editGroup(group)} aria-label={`编辑 ${group.label || group.domains[0]}`}><Pencil size={14} /></button><button className="icon-button danger" disabled={routeBusy} onClick={() => removeGroup(group)} aria-label={`删除 ${group.label || group.domains[0]}`}><X size={14} /></button></div></div>)}
+      {showCustom && customGroups.length === 0 && <div className="custom-service-empty"><Globe2 size={19} /><span>还没有自定义域名或服务组</span><button className="button button-secondary" onClick={openNewRoute}><Plus size={14} />立即新增</button></div>}
+    </section>
+    {editor && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !routeBusy) setEditor(null); }}><div className="modal custom-route-modal" role="dialog" aria-modal="true" aria-labelledby="custom-route-title"><div className="modal-header"><div><span className="eyebrow">自定义匹配</span><h2 id="custom-route-title">{editor.key ? "编辑匹配规则" : "新增域名或服务组"}</h2></div><button className="icon-button" disabled={routeBusy} onClick={() => setEditor(null)} aria-label="关闭"><X /></button></div><div className="route-mode-tabs"><button className={editor.mode === "domain" ? "active" : ""} onClick={() => setEditor({ ...editor, mode: "domain", label: "" })}>单个域名</button><button className={editor.mode === "service" ? "active" : ""} onClick={() => setEditor({ ...editor, mode: "service" })}>一组服务</button></div><div className="form-grid custom-route-form">{editor.mode === "service" && <label className="span-two">服务组名称<input value={editor.label} maxLength={60} placeholder="例如：Google 服务、影片资料站" onChange={(event) => setEditor({ ...editor, label: event.target.value })} /></label>}<label className="span-two">{editor.mode === "domain" ? "网站域名或完整网址" : "服务域名列表（每行一个，也支持逗号）"}{editor.mode === "domain" ? <input value={editor.domains} placeholder="例如：https://example.com/path" onChange={(event) => setEditor({ ...editor, domains: event.target.value })} /> : <textarea rows={7} value={editor.domains} placeholder={'example.com\napi.example.com\ncdn.example.com'} onChange={(event) => setEditor({ ...editor, domains: event.target.value })} />}</label><label className="span-two">匹配策略<select value={editor.channel} onChange={(event) => setEditor({ ...editor, channel: event.target.value as CustomRouteChannel })}>{Object.entries(customRouteChannelLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><div className="route-editor-summary"><span>{editor.mode === "domain" ? "域名及其子域名将使用该策略" : `当前识别 ${editorDomains.length} 个域名`}</span><strong>自定义规则优先于内置规则</strong></div><div className="modal-actions"><button className="button button-secondary" disabled={routeBusy} onClick={() => setEditor(null)}>取消</button><button className="button button-primary" disabled={routeBusy || editorInvalid} onClick={saveEditor}><Save size={15} />{routeBusy ? "正在预演并应用…" : "保存并应用"}</button></div>{routeMessage && <div className={`result-banner ${routeApplied ? "success" : ""}`}><StatusDot status={routeApplied ? "healthy" : "warning"} /><span>{routeMessage}</span></div>}</div></div>}
+  </>;
 }
 
 function GatewayPolicyCard({ policy, online, onChange }: { policy: GatewayDevicePolicy; online: boolean; onChange: (next: GatewayDevicePolicy) => void }) {
@@ -385,7 +463,7 @@ function MarketplacePage({ offers, setOffers, onReferralOpen, syncMessage }: { o
   </>;
 }
 
-function DiagnosticsPage({ snapshot, engine, supervisor, refresh, loading, onRestored, onRepairManaged, onSupervisorChange }: { snapshot: SystemSnapshot | null; engine: EngineReport | null; supervisor: SupervisorStatus | null; refresh: () => void; loading: boolean; onRestored: () => Promise<void>; onRepairManaged: () => Promise<boolean>; onSupervisorChange: (status: SupervisorStatus) => void }) {
+function DiagnosticsPage({ snapshot, engine, supervisor, egressAudit, refresh, loading, onRestored, onRepairManaged, onSupervisorChange }: { snapshot: SystemSnapshot | null; engine: EngineReport | null; supervisor: SupervisorStatus | null; egressAudit: EgressSafetyReport | null; refresh: () => void; loading: boolean; onRestored: () => Promise<void>; onRepairManaged: () => Promise<boolean>; onSupervisorChange: (status: SupervisorStatus) => void }) {
   const [backup, setBackup] = useState<LocalBackupStatus | null>(null);
   const [exported, setExported] = useState<DiagnosticExportReport | null>(null);
   const [busy, setBusy] = useState<"export" | "backup" | "restore" | "managed" | "supervisor" | null>(null);
@@ -444,7 +522,8 @@ function DiagnosticsPage({ snapshot, engine, supervisor, refresh, loading, onRes
     `${new Date().toLocaleTimeString()}  INFO   recovery_count  ${supervisor?.restartCount ?? 0}`,
     `${new Date().toLocaleTimeString()}  NOTE   no network configuration changed`,
   ];
-  return <><PageHeader eyebrow="诊断中心" title="检测后直接修复" description="必需组件提供修复按钮；外部可选程序只显示实测状态，不把未运行当成故障。" action={<button className="button button-primary" onClick={refresh} disabled={loading || busy !== null}><HeartPulse size={16} /> {loading ? "正在读取…" : "刷新本机实测"}</button>} /><section className="diagnostic-grid">{checks.map((check) => <article className="diagnostic-card" key={check.name}><StatusDot status={check.status} /><div><span>{check.name}</span><strong>{check.value}</strong>{check.action && <button className="button button-secondary diagnostic-action" disabled={busy !== null} onClick={() => void repair(check.action!)}>{busy === check.action ? "修复中…" : check.actionLabel}</button>}</div></article>)}</section><section className="recovery-grid"><article className="panel recovery-card"><PackageOpen /><div><span className="eyebrow">隐私诊断</span><h3>导出脱敏诊断包</h3><p>只写结构化本机状态，不收集原始日志、订阅 URL、密码、Cookie 或远端节点地址。</p>{exported && <small>{exported.directory}</small>}</div><button className="button button-secondary" disabled={busy !== null} onClick={() => void run("export")}><Download size={15} />{busy === "export" ? "正在导出…" : "导出诊断"}</button></article><article className="panel recovery-card"><Save /><div><span className="eyebrow">本机保险点</span><h3>配置备份</h3><p>线路 Token 和 VPS 密码只保存到系统凭据库；磁盘不会生成明文密钥。</p><small>{backup?.available && backup.createdAtMs ? `最近备份：${new Date(backup.createdAtMs).toLocaleString()} · ${backup.subscriptionCount} 个订阅` : backup?.message ?? "正在读取备份状态…"}</small></div><button className="button button-secondary" disabled={busy !== null} onClick={() => void run("backup")}><Save size={15} />{busy === "backup" ? "正在备份…" : "创建备份"}</button></article><article className="panel recovery-card"><ArchiveRestore /><div><span className="eyebrow">可验证恢复</span><h3>恢复最近备份</h3><p>只恢复应用设置和凭据，不碰当前系统代理；之后仍需主动“验证并应用”。</p><small>{backup?.available ? "备份可用" : "需要先创建备份"}</small></div><button className="button button-secondary" disabled={busy !== null || !backup?.available} onClick={() => void run("restore")}><ArchiveRestore size={15} />{busy === "restore" ? "正在恢复…" : "恢复配置"}</button></article></section>{message && <section className="sync-message"><StatusDot status={message.includes("失败") || message.includes("无法") ? "warning" : "healthy"} />{message}</section>}<section className="panel terminal-panel"><div className="terminal-top"><span /><span /><span /><strong>最近验证 · 只读</strong></div><pre>{lines.join("\n")}</pre></section></>;
+  const egressPanel = <section className={`panel egress-safety-panel ${egressAudit?.ready ? "ready" : "blocked"}`}><div className="panel-heading"><div><span className="eyebrow">Claude Cage 设计取长</span><h2>出口安全门</h2></div><span className={`soft-badge ${egressAudit?.ready ? "success" : ""}`}>{egressAudit ? (egressAudit.ready ? "关键证据完整" : `${egressAudit.criticalFailures} 项阻断`) : "等待实测"}</span></div><p className="section-copy">{egressAudit?.message ?? "读取活动槽、系统代理归属和运行策略后再判断；监听端口存在不等于出口已经正确提交。"}</p><div className="egress-check-grid">{egressAudit?.checks.map((check) => <article className={`egress-check state-${check.state}`} key={check.id}><div className="egress-check-title"><StatusDot status={check.state === "passed" ? "healthy" : check.state === "failed" ? "warning" : "idle"} /><strong>{check.title}</strong><span>{check.critical ? "关键" : check.state === "unknown" ? "边界" : "提示"}</span></div><p>{check.evidence}</p></article>) ?? <article className="egress-check state-unknown"><div className="egress-check-title"><StatusDot status="idle" /><strong>等待桌面后端</strong><span>边界</span></div><p>安全门尚未获得本机只读证据。</p></article>}</div><div className="egress-boundary"><ShieldCheck size={16} /><span>系统代理模式不冒充虚拟机全流量隔离：DNS、UDP、IPv6 没有直接证据时明确显示“未知”，不会误报通过。</span></div></section>;
+  return <><PageHeader eyebrow="诊断中心" title="检测后直接修复" description="必需组件提供修复按钮；外部可选程序只显示实测状态，不把未运行当成故障。" action={<button className="button button-primary" onClick={refresh} disabled={loading || busy !== null}><HeartPulse size={16} /> {loading ? "正在读取…" : "刷新本机实测"}</button>} /><section className="diagnostic-grid">{checks.map((check) => <article className="diagnostic-card" key={check.name}><StatusDot status={check.status} /><div><span>{check.name}</span><strong>{check.value}</strong>{check.action && <button className="button button-secondary diagnostic-action" disabled={busy !== null} onClick={() => void repair(check.action!)}>{busy === check.action ? "修复中…" : check.actionLabel}</button>}</div></article>)}</section>{egressPanel}<section className="recovery-grid"><article className="panel recovery-card"><PackageOpen /><div><span className="eyebrow">隐私诊断</span><h3>导出脱敏诊断包</h3><p>只写结构化本机状态，不收集原始日志、订阅 URL、密码、Cookie 或远端节点地址。</p>{exported && <small>{exported.directory}</small>}</div><button className="button button-secondary" disabled={busy !== null} onClick={() => void run("export")}><Download size={15} />{busy === "export" ? "正在导出…" : "导出诊断"}</button></article><article className="panel recovery-card"><Save /><div><span className="eyebrow">本机保险点</span><h3>配置备份</h3><p>线路 Token 和 VPS 密码只保存到系统凭据库；磁盘不会生成明文密钥。</p><small>{backup?.available && backup.createdAtMs ? `最近备份：${new Date(backup.createdAtMs).toLocaleString()} · ${backup.subscriptionCount} 个订阅` : backup?.message ?? "正在读取备份状态…"}</small></div><button className="button button-secondary" disabled={busy !== null} onClick={() => void run("backup")}><Save size={15} />{busy === "backup" ? "正在备份…" : "创建备份"}</button></article><article className="panel recovery-card"><ArchiveRestore /><div><span className="eyebrow">可验证恢复</span><h3>恢复最近备份</h3><p>只恢复应用设置和凭据，不碰当前系统代理；之后仍需主动“验证并应用”。</p><small>{backup?.available ? "备份可用" : "需要先创建备份"}</small></div><button className="button button-secondary" disabled={busy !== null || !backup?.available} onClick={() => void run("restore")}><ArchiveRestore size={15} />{busy === "restore" ? "正在恢复…" : "恢复配置"}</button></article></section>{message && <section className="sync-message"><StatusDot status={message.includes("失败") || message.includes("无法") ? "warning" : "healthy"} />{message}</section>}<section className="panel terminal-panel"><div className="terminal-top"><span /><span /><span /><strong>最近验证 · 只读</strong></div><pre>{lines.join("\n")}</pre></section></>;
 }
 
 function SettingsPage({ preferences, setPreferences, syncMessage, updateReport, updateMessage, updateBusy, onCheckUpdate, onInstallUpdate }: { preferences: AppPreferences; setPreferences: (value: AppPreferences) => void; syncMessage: string; updateReport: UpdateCheckReport | null; updateMessage: string; updateBusy: "check" | "install" | null; onCheckUpdate: () => void; onInstallUpdate: () => void }) {
@@ -462,6 +541,7 @@ function App() {
   const [engine, setEngine] = useState<EngineReport | null>(null);
   const [managed, setManaged] = useState<ManagedStatus | null>(null);
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null);
+  const [egressAudit, setEgressAudit] = useState<EgressSafetyReport | null>(null);
   const [managedBusy, setManagedBusy] = useState(false);
   const [managedMessage, setManagedMessage] = useState("");
   const [preferenceSyncMessage, setPreferenceSyncMessage] = useState("");
@@ -514,13 +594,14 @@ function App() {
 
   const refreshRuntime = () => {
     setDiagnosticsLoading(true);
-    Promise.all([settleTask(getSystemSnapshot()), settleTask(getEngineStatus()), settleTask(getManagedStatus()), settleTask(getSupervisorStatus())])
-      .then(([system, report, managedStatus, supervisorStatus]) => {
+    Promise.all([settleTask(getSystemSnapshot()), settleTask(getEngineStatus()), settleTask(getManagedStatus()), settleTask(getSupervisorStatus()), settleTask(runEgressSafetyAudit())])
+      .then(([system, report, managedStatus, supervisorStatus, audit]) => {
         if (system.ok && system.value) setSnapshot(system.value);
         if (report.ok && report.value) setEngine(report.value);
         if (managedStatus.ok && managedStatus.value) setManaged(managedStatus.value);
         if (supervisorStatus.ok && supervisorStatus.value) setSupervisor(supervisorStatus.value);
-        const failures = [system, report, managedStatus, supervisorStatus].filter((result) => !result.ok);
+        if (audit.ok && audit.value) setEgressAudit(audit.value);
+        const failures = [system, report, managedStatus, supervisorStatus, audit].filter((result) => !result.ok);
         if (failures.length > 0) setManagedMessage(`状态刷新完成，${failures.length} 项读取失败`);
       })
       .finally(() => setDiagnosticsLoading(false));
@@ -533,9 +614,10 @@ function App() {
       settleTask(getEngineStatus()),
       settleTask(getManagedStatus()),
       settleTask(getSupervisorStatus()),
+      settleTask(runEgressSafetyAudit()),
       settleTask(loadReferralOffers()),
     ])
-      .then(([stored, system, report, managedStatus, supervisorStatus, storedOffers]) => {
+      .then(([stored, system, report, managedStatus, supervisorStatus, audit, storedOffers]) => {
         if (stored.ok) {
           if (stored.value) setPreferences(stored.value);
           setPreferencePersistenceReady(true);
@@ -546,6 +628,7 @@ function App() {
         if (report.ok && report.value) setEngine(report.value);
         if (managedStatus.ok && managedStatus.value) setManaged(managedStatus.value);
         if (supervisorStatus.ok && supervisorStatus.value) setSupervisor(supervisorStatus.value);
+        if (audit.ok && audit.value) setEgressAudit(audit.value);
         if (storedOffers.ok) {
           setOffers(normalizeReferralOffers(storedOffers.value ?? defaultOffers));
           setReferralPersistenceReady(true);
@@ -698,13 +781,15 @@ function App() {
       const report = stopping ? await stopManagedMode() : migrating ? await migrateLegacyMode() : await startManagedMode();
       setManaged(report.status); setManagedMessage(report.message);
       if (report.success) setPreferences({ ...preferences, mode: report.status.running ? "managed" : "preview", autoStart: migrating ? true : preferences.autoStart });
-      const [system, supervisorStatus] = await Promise.all([getSystemSnapshot(), getSupervisorStatus()]);
+      const [system, supervisorStatus, audit] = await Promise.all([getSystemSnapshot(), getSupervisorStatus(), runEgressSafetyAudit()]);
       if (system) setSnapshot(system);
       if (supervisorStatus) setSupervisor(supervisorStatus);
+      if (audit) setEgressAudit(audit);
     } catch (error) {
       setManagedMessage(error instanceof Error ? error.message : String(error));
-      const status = await getManagedStatus();
+      const [status, audit] = await Promise.all([getManagedStatus(), runEgressSafetyAudit()]);
       if (status) setManaged(status);
+      if (audit) setEgressAudit(audit);
     } finally { setManagedBusy(false); }
   };
 
@@ -721,16 +806,17 @@ function App() {
     try {
       const report = await startManagedMode();
       setManaged(report.status); setManagedMessage(report.message);
-      const [system, engineStatus] = await Promise.all([getSystemSnapshot(), getEngineStatus()]);
+      const [system, engineStatus, audit] = await Promise.all([getSystemSnapshot(), getEngineStatus(), runEgressSafetyAudit()]);
       if (system) setSnapshot(system);
       if (engineStatus) setEngine(engineStatus);
+      if (audit) setEgressAudit(audit);
       return report.success;
     } finally { setManagedBusy(false); }
   };
 
   const visibleOffers = offers.filter((offer) => offer.origin !== "publisher" || preferences.showPublisherOffers);
   const catalogStatus = publisherCatalog?.signatureVerified ? publisherCatalogMessage : publisherCatalogMessage;
-  const content = active === "sources" ? <SourcesPage offers={visibleOffers} onReferralOpen={handleReferralOpen} onConfigureReferrals={() => setActive("marketplace")} /> : active === "services" ? <ServicesPage services={services} setServices={setServices} /> : active === "devices" ? <DevicesPage /> : active === "remote" ? <RemotePage offers={visibleOffers} onReferralOpen={handleReferralOpen} onConfigureReferrals={() => setActive("marketplace")} /> : active === "marketplace" ? <MarketplacePage offers={visibleOffers} setOffers={setOffers} onReferralOpen={handleReferralOpen} syncMessage={[referralSyncMessage, catalogStatus].filter(Boolean).join(" · ")} /> : active === "diagnostics" ? <DiagnosticsPage snapshot={snapshot} engine={engine} supervisor={supervisor} refresh={refreshRuntime} loading={diagnosticsLoading} onRestored={reloadRestoredConfiguration} onRepairManaged={repairManagedFromDiagnostics} onSupervisorChange={setSupervisor} /> : active === "settings" ? <SettingsPage preferences={preferences} setPreferences={setPreferences} syncMessage={preferenceSyncMessage} updateReport={updateReport} updateMessage={updateMessage} updateBusy={updateBusy} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void runUpdateInstall()} /> : <Dashboard preferences={preferences} setPreferences={setPreferences} services={services} snapshot={snapshot} managed={managed} managedBusy={managedBusy} managedMessage={managedMessage} onManagedAction={() => void handleManagedAction()} />;
+  const content = active === "sources" ? <SourcesPage offers={visibleOffers} onReferralOpen={handleReferralOpen} onConfigureReferrals={() => setActive("marketplace")} /> : active === "services" ? <ServicesPage services={services} setServices={setServices} /> : active === "devices" ? <DevicesPage /> : active === "remote" ? <RemotePage offers={visibleOffers} onReferralOpen={handleReferralOpen} onConfigureReferrals={() => setActive("marketplace")} /> : active === "marketplace" ? <MarketplacePage offers={visibleOffers} setOffers={setOffers} onReferralOpen={handleReferralOpen} syncMessage={[referralSyncMessage, catalogStatus].filter(Boolean).join(" · ")} /> : active === "diagnostics" ? <DiagnosticsPage snapshot={snapshot} engine={engine} supervisor={supervisor} egressAudit={egressAudit} refresh={refreshRuntime} loading={diagnosticsLoading} onRestored={reloadRestoredConfiguration} onRepairManaged={repairManagedFromDiagnostics} onSupervisorChange={setSupervisor} /> : active === "settings" ? <SettingsPage preferences={preferences} setPreferences={setPreferences} syncMessage={preferenceSyncMessage} updateReport={updateReport} updateMessage={updateMessage} updateBusy={updateBusy} onCheckUpdate={() => void runUpdateCheck()} onInstallUpdate={() => void runUpdateInstall()} /> : <Dashboard preferences={preferences} setPreferences={setPreferences} services={services} snapshot={snapshot} managed={managed} managedBusy={managedBusy} managedMessage={managedMessage} onManagedAction={() => void handleManagedAction()} />;
   return <div className="app-shell"><aside className="sidebar"><div className="brand"><div className="brand-mark"><Cable size={22} /></div><div><strong>AI Route</strong><span>智能分流管家</span></div></div><nav>{navigation.map(({ id, label, icon: Icon }) => <button key={id} className={active === id ? "nav-item active" : "nav-item"} onClick={() => setActive(id)}><Icon size={18} /><span>{label}</span>{id === "marketplace" && <i>精选</i>}</button>)}</nav><div className="sidebar-bottom"><div className="core-status"><div><Cpu size={16} /><span>核心状态</span></div><strong><StatusDot status={managed?.running ? "healthy" : "idle"} />{managed?.running ? "托管运行中" : managed?.legacyConflict ? "旧版待迁移" : "安全预览"}</strong></div><button className="support-card" onClick={() => setActive("diagnostics")}><Database size={19} /><div><strong>备份与恢复</strong><span>系统凭据库保险点</span></div><ChevronRight size={16} /></button></div></aside><main className="main-content"><div className="topbar"><div className="breadcrumb"><span>AI Route</span><ChevronRight size={14} /><strong>{navigation.find((item) => item.id === active)?.label}</strong></div><div className="top-actions"><span className="preview-pill"><LockKeyhole size={13} />{managed?.running ? "托管模式" : "预览模式"}</span><span className="runtime-indicator" title={snapshot ? "桌面后端已连接" : "正在连接桌面后端"}><Wifi size={18} /><StatusDot status={snapshot ? "healthy" : "idle"} /></span><span className="avatar" aria-label="本机用户">X</span></div></div><div className="page-content">{content}</div></main>{pendingReferral && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !referralOpenBusy) setPendingReferral(null); }}><div className="modal purchase-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="purchase-confirm-title"><div className="modal-header"><div><span className="eyebrow">离开前确认</span><h2 id="purchase-confirm-title">打开服务商页面</h2></div><button className="icon-button" disabled={referralOpenBusy} onClick={() => setPendingReferral(null)} aria-label="关闭"><X /></button></div><div className="purchase-confirm-summary"><div className="purchase-confirm-icon"><ShoppingBag /></div><div><strong>{pendingReferral.title}</strong><span>{pendingReferral.provider}</span></div></div><dl className="purchase-confirm-facts"><div><dt>价格说明</dt><dd>{pendingReferral.price || "以服务商页面为准"}</dd></div>{pendingReferral.coupon && <div><dt>优惠码</dt><dd><code>{pendingReferral.coupon}</code></dd></div>}<div><dt>目标网站</dt><dd>{referralDestinationHost(pendingReferral.url)}</dd></div></dl><div className="referral-disclosure"><ShieldCheck /><div><strong>链接关系说明</strong><p>{pendingReferral.disclosure}</p><span>购买、付款和售后由服务商完成；本软件只记录本机打开次数，不收集订单和支付信息。</span></div></div><div className="modal-actions purchase-confirm-actions"><button className="button button-secondary" disabled={referralOpenBusy} onClick={() => setPendingReferral(null)}>取消</button><button className="button button-primary" disabled={referralOpenBusy} onClick={() => void confirmReferralOpen()}><ExternalLink size={15} />{referralOpenBusy ? "正在打开…" : "确认并打开服务商页面"}</button></div></div></div>}</div>;
 }
 

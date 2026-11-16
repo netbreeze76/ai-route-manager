@@ -58,6 +58,20 @@ export interface ProfileSummary {
   preferredNodeKeywords: string[];
 }
 
+export type CustomRouteChannel = "direct" | "download" | "ai" | "fixed" | "gemini";
+
+export interface CustomRouteRule {
+  label: string;
+  domain: string;
+  channel: CustomRouteChannel;
+}
+
+export interface CustomRouteUpdateReport {
+  rules: CustomRouteRule[];
+  applied: boolean;
+  message: string;
+}
+
 export interface PreviewReport {
   success: boolean;
   message: string;
@@ -72,6 +86,25 @@ export interface ManagedStatus {
   activeProxyPort: number | null;
   systemProxy: string | null;
   legacyConflict: boolean;
+  message: string;
+}
+
+export type EgressSafetyState = "passed" | "failed" | "warning" | "unknown";
+
+export interface EgressSafetyCheck {
+  id: string;
+  title: string;
+  state: EgressSafetyState;
+  critical: boolean;
+  evidence: string;
+}
+
+export interface EgressSafetyReport {
+  checkedAtMs: number;
+  ready: boolean;
+  criticalFailures: number;
+  warnings: number;
+  checks: EgressSafetyCheck[];
   message: string;
 }
 
@@ -437,6 +470,16 @@ export async function importExistingProfile(): Promise<ProfileSummary> {
   return invoke<ProfileSummary>("import_existing_profile");
 }
 
+export async function loadCustomRoutes(): Promise<CustomRouteRule[]> {
+  if (!isTauri()) return [];
+  return invoke<CustomRouteRule[]>("load_custom_routes");
+}
+
+export async function saveCustomRoutes(routes: CustomRouteRule[]): Promise<CustomRouteUpdateReport> {
+  if (!isTauri()) throw new Error("请在桌面应用中保存网站分流规则");
+  return invoke<CustomRouteUpdateReport>("save_custom_routes", { routes });
+}
+
 export async function runEnginePreview(): Promise<PreviewReport> {
   if (!isTauri()) throw new Error("请在桌面应用中运行安全预演");
   return invoke<PreviewReport>("run_engine_preview");
@@ -445,6 +488,11 @@ export async function runEnginePreview(): Promise<PreviewReport> {
 export async function getManagedStatus(): Promise<ManagedStatus | null> {
   if (!isTauri()) return null;
   return invoke<ManagedStatus>("get_managed_status");
+}
+
+export async function runEgressSafetyAudit(): Promise<EgressSafetyReport | null> {
+  if (!isTauri()) return null;
+  return invoke<EgressSafetyReport>("run_egress_safety_audit");
 }
 
 export async function getSupervisorStatus(): Promise<SupervisorStatus | null> {

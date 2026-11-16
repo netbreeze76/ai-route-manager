@@ -50,6 +50,16 @@ describe("route planner", () => {
     const plan = buildRoutePlan(defaultServices, defaultPreferences);
     expect(plan.find((item) => item.service === "中国大陆服务")?.target).toBe("DIRECT");
   });
+
+  it("upgrades saved Gemini labels to the fixed fail-closed AI exit", () => {
+    const savedServices = defaultServices.map((service) => service.id === "google-ai"
+      ? { ...service, exit: "同地区兜底", strict: false }
+      : service);
+    const plan = buildRoutePlan(savedServices, { ...defaultPreferences, strictAi: false });
+    const gemini = plan.find((item) => item.service === "Gemini / Google AI");
+    expect(gemini?.target).toBe("固定出口");
+    expect(gemini?.failClosed).toBe(true);
+  });
 });
 
 describe("referral offer validation", () => {
